@@ -2,7 +2,7 @@
 
 SideQuest's backend runs independent personal Scouts with persistent private memory and a PostgreSQL mailbox. Scouts exchange inquiries, information, proposals, counteroffers and exact-version acceptances. The scheduler routes turns and enforces limits; it does not use a central model to choose for everyone. A shared LLM provider is used with separate, owner-scoped inputs for each Scout. Humans approve the final proposal individually.
 
-The existing Next.js App Router frontend, component library, Better Auth and example post router are preserved. The new backend is available through the existing typed tRPC client; the starter page has not been redesigned or wired to a planning UI.
+The Figma-derived Next.js frontend is connected to the authenticated backend through tRPC. Login/signup, onboarding, Scout conversations, memory review/edit/delete, catalog discovery, permitted people, settings, negotiation transcripts, exact-version approvals, and dated revisions use persisted data. The existing visual design and component library are retained; the runtime screens no longer use fabricated activities, replies, plans, match percentages or notifications.
 
 ## Local setup
 
@@ -20,6 +20,8 @@ DATABASE_URL=postgresql://postgres:password@localhost:5432/sidequest
 OPENROUTER_API_KEY=your-key
 OPENROUTER_MODEL=your-chosen-openrouter-model-id
 BETTER_AUTH_SECRET=a-long-random-secret
+BETTER_AUTH_URL=http://localhost:3000
+# Optional, only for GitHub OAuth:
 BETTER_AUTH_GITHUB_CLIENT_ID=your-github-oauth-client-id
 BETTER_AUTH_GITHUB_CLIENT_SECRET=your-github-oauth-client-secret
 # Optional, per negotiation:
@@ -40,7 +42,15 @@ pnpm dev
 
 The initial migration includes the unchanged existing auth/post tables and new `sq_*` tables. **If you already created tables with `db:push`, baseline that database against the initial migration or use a new development database before running migrations.** The migration is not an automatic conversion of an untracked existing database. Do not drop existing auth/user data to resolve a migration conflict. Subsequent schema changes use `pnpm db:generate` then `pnpm db:migrate`. Drizzle's old `sidequest_*` filter excluded the actual existing tables; it has been removed.
 
-`db:checkpoints` applies LangGraph's own checkpoint migrations. Application tables remain the authoritative source for plans, decisions, transcripts and memory. Use a Node runtime with connection pooling; these workflows are not intended for the Edge runtime. Better Auth's existing email/password API and GitHub sign-in remain available. The existing GitHub callback is configured for `http://localhost:3000/api/auth/callback/github`.
+`db:checkpoints` applies LangGraph's own checkpoint migrations. Application tables remain the authoritative source for plans, decisions, transcripts and memory. The former `*:frontend` commands now alias the full application commands and require the same backend setup; they no longer disable validation or supply an ephemeral auth secret. Use a Node runtime with connection pooling; these workflows are not intended for the Edge runtime. Better Auth email/password login is connected to the login screen. GitHub OAuth remains available when both optional GitHub credentials are configured; its callback derives from `BETTER_AUTH_URL` rather than a hardcoded localhost URL.
+
+## Use the connected frontend
+
+Open the app after migrations, checkpoint setup and seeding. Sign up at `/login`, choose at least two interests and availability, and explicitly opt into discovery/sharing if desired. Onboarding writes separate memories with source provenance and converts the selected periods into exact dates for the next two weeks. Use Settings to change those dates, the planning circle, sharing consent or a hard budget ceiling. Without opt-in or availability, planning is intentionally restricted.
+
+Scout conversations and memories survive reloads and new logins. Memory edits save explicitly; deleting a memory can optionally erase its source conversation. The People screen lists only mutually permitted, opted-in people and their public names; it does not publish private memories or calendar details. For development, the eight clearly named synthetic users belong to `synthetic-campus`. A real account can select that circle in Settings to negotiate with the seeded demonstration Scouts.
+
+Use the Home request box, a catalog activity's "Ask Scout to coordinate" action, or a person's "Ask Scout" action to start a negotiation. Plans show live status, a real addressed transcript, proposal terms and each human's approval count. Every participant approves from their own authenticated account. A time-change form takes local dated times and converts them to UTC; the revised proposal loses prior approvals. Open panels and plan lists poll for approvals and changes from other users, including changes to previously confirmed plans. Model failures show a failed state and a revision/retry path rather than a fabricated agreement.
 
 ## Run the demonstration
 
@@ -103,7 +113,7 @@ Every operation uses the existing authenticated Better Auth session. Ownership n
 8. Each signed-in participant calls `sidequest.approveProposal({ negotiationId, proposalId, hash })` for the exact displayed version. `rejectProposal` uses the same reference and ends the negotiation. No agent action can write a human approval. The final confirmation transaction revalidates all hard constraints and current permissions.
 9. `sidequest.requestRevision({ negotiationId, requestId, instruction, constraints })` immediately updates **the caller's** session constraints, invalidates current approvals/acceptances and in-flight actions, and resumes the status to `NEGOTIATING`. Then call `resumeNegotiation`. Proposals include an immutable activity snapshot and bind the catalog terms into their hash; changed catalog prices or locations require renewed consent. A revision creates a new proposal/version/hash and every human must approve again. `AWAITING_USER_INPUT` is resumed through the same operation.
 
-For “Actually, I can't do 3. Can we make it 6?”, the frontend should pass the user's instruction with the resolved, dated time constraint. For example, 6–8 PM in Seoul on 21 November 2026 is:
+For “Actually, I can't do 3. Can we make it 6?”, the connected plan panel collects the user's instruction and exact dated time window. For example, 6–8 PM in Seoul on 21 November 2026 is:
 
 ```ts
 await api.sidequest.requestRevision.mutate({
@@ -144,8 +154,24 @@ Normal Vitest tests use scripted models and actual SQL migrations in PGlite. The
 
 The optional smoke tests run only when `RUN_OPENROUTER_SMOKE=1`, `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` are all set. Real-agent output need not converge; the test requires an actual exchange between independent Scouts and forbids automatic human confirmation.
 
-PGlite serializes transactions and substitutes a no-op for advisory locks. It exercises PostgreSQL syntax, full-text search, indexes, foreign keys and domain workflows, but **does not verify native PostgreSQL race behavior or PostgresSaver persistence**. Run those against a real PostgreSQL service before deployment. No live OpenRouter behavior is claimed without a configured smoke run.
+PGlite serializes transactions and substitutes a no-op for advisory locks, so the offline suite does not prove native PostgreSQL concurrency. An additional opt-in native PostgreSQL test checks PostgresSaver recovery across connections, simultaneous approvals, and exactly one final confirmation. Use an isolated, migrated and seeded test database:
 
-At implementation verification, all 42 offline tests, backend type checking, focused backend lint, formatting, and the deterministic demo passed. On 17 November 2026, both opt-in real OpenRouter tests also passed with `openai/gpt-4.1-mini`: structured extraction/reply and an independent multi-Scout conversation. Normal offline runs continue to skip these two opt-in tests. `pnpm exec next build --no-lint` also completed successfully. The normal full build/lint remained blocked by existing lint errors in `chart.tsx`, `code-block.tsx`, `toggle-group.tsx`, `use-highlighted-code.ts`, and a generated `next-env.d.ts` reference. Those frontend files were left unchanged.
+```sh
+NATIVE_TEST_DATABASE_URL=postgresql://... pnpm test
+```
+
+Browser end-to-end tests use the real running Next.js app and authentication/database (not mocked HTTP routes). Install Chromium and start the app against an isolated migrated/seeded database, then run:
+
+```sh
+pnpm exec playwright install chromium
+# Defaults to http://localhost:3100; override if your server uses another port.
+PLAYWRIGHT_BASE_URL=http://localhost:3100 pnpm test:e2e
+# Also run the two-person approval/revision test; this must match the app's database.
+PLAYWRIGHT_DATABASE_URL=postgresql://... pnpm test:e2e
+```
+
+The first browser test covers real signup, onboarding, persistent memory edits, discovery, logout/login, session isolation and authenticated route guards. The second creates two isolated authenticated browser contexts and verifies that one person's approval cannot confirm a plan, both people receive confirmation through polling, and a revision revokes both approvals on both screens. That test uses scripted model decisions for its persisted proposal fixture; separate OpenRouter smoke tests and a manual live browser run exercise real model decisions.
+
+On 17 November 2026, verification included 47 passing Vitest tests with native PostgreSQL enabled, two passing browser end-to-end tests, and both configured OpenRouter smoke checks (the extraction/reply check passed on retry after an invalid structured response was safely rejected). The manual live browser flow also reached an agreed proposal, recorded one human approval, then changed the time from 3 PM to 6 PM and displayed proposal v2 with zero stale approvals. `pnpm build`, type checking and full lint pass (lint reports non-blocking image/config warnings). The previously failing chart/toggle/highlighter lint issues have been fixed. Application code still runs extraction/negotiation in the request process; this prototype does not include an always-on worker or venue bookings.
 
 Integration API references: [LangChain ChatOpenAI](https://docs.langchain.com/oss/javascript/integrations/chat/openai), [LangGraph persistence](https://docs.langchain.com/oss/javascript/langgraph/persistence), and [OpenRouter LangChain integration](https://openrouter.ai/docs/guides/community/langchain). The installed package declarations were also checked for the APIs used here.

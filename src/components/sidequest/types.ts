@@ -55,9 +55,9 @@ export interface HeaderProps {
   userName: string;
   onNotifications: () => void;
   showNotifications: boolean;
-  hikingFound: boolean;
-  hikingRescheduled: boolean;
-  onHikingClick: () => void;
+  notifications: { id: string; title: string; status: string }[];
+  onNotification: (id: string) => void;
+  onSettings: () => void;
 }
 export interface HomeProps {
   userName: string;
@@ -67,6 +67,9 @@ export interface HomeProps {
   onNavigate: (view: View) => void;
   onSelect: (activity: Activity) => void;
   plans: Activity[];
+  activities: Activity[];
+  people: Person[];
+  busy: boolean;
 }
 export interface DiscoverProps {
   searchTerm: string;
@@ -79,10 +82,14 @@ export interface DiscoverProps {
 }
 export interface PlansProps {
   plans: Activity[];
+  negotiations: { id: string; title: string; status: string }[];
+  onNegotiation: (id: string) => void;
   onSelect: (activity: Activity) => void;
   onDiscover: () => void;
 }
 export interface PeopleProps {
+  people: (Person & { id: string })[];
+  busy: boolean;
   invited: string[];
   onInvite: (name: string) => void;
 }

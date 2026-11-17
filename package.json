@@ -11,10 +11,10 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "dev": "next dev --turbo",
-    "dev:frontend": "node scripts/frontend.mjs dev",
-    "build:frontend": "node scripts/frontend.mjs build --no-lint",
-    "start:frontend": "node scripts/frontend.mjs start",
-    "check:frontend": "eslint src/components/sidequest src/app src/components/ui/button.tsx src/components/ui/input.tsx src/components/ui/textarea.tsx src/components/ui/dialog.tsx src/components/ui/sheet.tsx && tsc --noEmit",
+    "dev:frontend": "pnpm dev",
+    "build:frontend": "pnpm build",
+    "start:frontend": "pnpm start",
+    "check:frontend": "pnpm check",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mdx}\" --cache",
     "format:write": "prettier --write \"**/*.{ts,tsx,js,jsx,mdx}\" --cache",
     "lint": "eslint .",
@@ -28,7 +28,8 @@
     "demo": "tsx --env-file=.env scripts/demo.ts",
     "db:checkpoints": "tsx --env-file=.env scripts/checkpoints.ts",
     "test:smoke": "RUN_OPENROUTER_SMOKE=1 vitest run tests/openrouter.test.ts",
-    "demo:local": "tsx scripts/demo.ts --embedded"
+    "demo:local": "tsx scripts/demo.ts --embedded",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.7.2",
@@ -53,6 +54,7 @@
     "input-otp": "^1.5.0",
     "lucide-react": "^1.71.0",
     "next": "^15.2.3",
+    "pg": "^8.23.1",
     "postgres": "^3.4.4",
     "react": "^19.0.0",
     "react-day-picker": "^10.0.2",
@@ -70,8 +72,10 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.16",
     "@eslint/eslintrc": "^3.3.1",
+    "@playwright/test": "^1.65.1",
     "@tailwindcss/postcss": "^4.0.15",
     "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "dotenv": "^18.0.10",

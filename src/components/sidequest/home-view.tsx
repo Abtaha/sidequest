@@ -1,11 +1,11 @@
 "use client";
 import { ActivityCard } from "./activity-card";
 import type { HomeProps } from "./types";
-import { activities, people } from "./data";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Icon } from "./icons";
-import { SectionHeading, DetailRow, PersonAvatar } from "./shared";
+import { SectionHeading, PersonAvatar } from "./shared";
 export function HomeView({
   userName,
   request,
@@ -14,6 +14,9 @@ export function HomeView({
   onNavigate,
   onSelect,
   plans,
+  activities,
+  people,
+  busy,
 }: HomeProps) {
   return (
     <div className="mx-auto max-w-[1320px] px-5 py-8 md:px-9 md:py-10">
@@ -23,7 +26,7 @@ export function HomeView({
             <Icon name="spark" className="h-4 w-4" />
             {"Scout is ready"}
           </div>
-          <h1 className="max-w-2xl text-4xl font-semibold leading-[1.05] tracking-[-0.045em] md:text-[52px]">
+          <h1 className="max-w-2xl text-4xl leading-[1.05] font-semibold tracking-[-0.045em] md:text-[52px]">
             {"What are you up for, "}
             {userName.split(" ")[0]}
             {"?"}
@@ -45,6 +48,7 @@ export function HomeView({
             <Button
               design
               onClick={onSubmit}
+              disabled={busy || !request.trim()}
               className="grid h-11 w-11 place-items-center rounded-xl bg-[#c9ed93] text-[#244a36] transition hover:bg-[#b9df80]"
               aria-label="Find plans"
               type="button"
@@ -53,63 +57,39 @@ export function HomeView({
             </Button>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            {["Free this weekend", "Low-key tonight", "Try something new"].map((e) => (
-              <Button
-                design
-                key={e}
-                onClick={() => setRequest(e)}
-                className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-white/75 transition hover:bg-white/10 hover:text-white"
-                type="button"
-              >
-                {e}
-              </Button>
-            ))}
+            {["Free this weekend", "Low-key tonight", "Try something new"].map(
+              (e) => (
+                <Button
+                  design
+                  key={e}
+                  onClick={() => setRequest(e)}
+                  className="rounded-full border border-white/15 px-3 py-1.5 text-xs text-white/75 transition hover:bg-white/10 hover:text-white"
+                  type="button"
+                >
+                  {e}
+                </Button>
+              ),
+            )}
           </div>
         </div>
         <div className="rounded-[28px] border border-[#dfe2da] bg-[#fbfcf8] p-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#839087]">
-                {"Ready for review"}
-              </p>
-              <h2 className="mt-1 text-xl font-semibold tracking-[-0.03em]">
-                {"Coffee with Elena"}
-              </h2>
-            </div>
-            <span className="rounded-full bg-[#dff4c7] px-3 py-1.5 text-xs font-semibold text-[#315c3e]">
-              {"94% fit"}
-            </span>
-          </div>
-          <div className="my-6 rounded-2xl bg-[#f0f2ec] p-4 text-sm leading-5 text-[#4e5851]">
-            <b className="text-[#253129]">{"Why this works"}</b>
-            <br />
-            {
-              "You both want a quiet catch-up near campus. Sunday at 11 fits both calendars and budgets."
-            }
-          </div>
-          <div className="space-y-3 text-sm">
-            <DetailRow icon="calendar">{"Sunday, May 26 · 11:00 AM"}</DetailRow>
-            <DetailRow icon="pin">{"Felt Coffee · 8 min walk"}</DetailRow>
-          </div>
+          <p className="text-xs font-semibold text-[#839087] uppercase">
+            Your next plan
+          </p>
+          <h2 className="mt-3 text-xl font-semibold">
+            {plans[0]?.title ?? "Make room for something good"}
+          </h2>
+          <p className="mt-4 text-sm leading-6 text-[#627067]">
+            {plans[0]
+              ? `${plans[0].date} · ${plans[0].time}`
+              : "Tell Scout what you are up for. Your agents can explore options, and every person approves before a plan is confirmed."}
+          </p>
           <Button
             design
-            onClick={() =>
-              onSelect({
-                ...activities[3]!,
-                title: "Coffee with Elena",
-                date: "Sunday, May 26",
-                time: "11:00 AM – 12:30 PM",
-                location: "Felt Coffee · 8 min walk",
-                price: "Around ₩8,000",
-                description: "A quiet catch-up at a light-filled coffee shop near campus.",
-                people: ["Elena"],
-              })
-            }
-            className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#244a36] px-4 py-3 text-sm font-semibold text-white"
-            type="button"
+            onClick={() => onNavigate("Plans")}
+            className="mt-6 w-full rounded-xl bg-[#244a36] p-3 text-sm font-semibold text-white"
           >
-            {"Review plan "}
-            <Icon name="arrow" className="h-4 w-4" />
+            Review your SideQuests →
           </Button>
         </div>
       </section>
@@ -128,7 +108,7 @@ export function HomeView({
         <div className="rounded-[24px] border border-[#dfe2da] bg-[#fbfcf8] p-6 md:col-span-2">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.13em] text-[#7f8b82]">
+              <p className="text-xs font-semibold tracking-[0.13em] text-[#7f8b82] uppercase">
                 {"Your week"}
               </p>
               <h2 className="mt-1 text-xl font-semibold">
@@ -175,11 +155,15 @@ export function HomeView({
         </div>
         <div className="rounded-[24px] bg-[#e3ebd9] p-6">
           <div className="flex h-full flex-col">
-            <p className="text-xs font-semibold uppercase tracking-[0.13em] text-[#667661]">
+            <p className="text-xs font-semibold tracking-[0.13em] text-[#667661] uppercase">
               {"Circle pulse"}
             </p>
-            <p className="mt-3 text-4xl font-semibold tracking-[-0.05em]">{"12"}</p>
-            <p className="mt-1 text-sm text-[#536351]">{"friends are open to plans this week"}</p>
+            <p className="mt-3 text-4xl font-semibold tracking-[-0.05em]">
+              {people.length}
+            </p>
+            <p className="mt-1 text-sm text-[#536351]">
+              {"people have opted into planning"}
+            </p>
             <div className="mt-5 flex -space-x-2">
               {people.slice(0, 4).map((e) => (
                 <PersonAvatar key={e.name} person={e} small={true} />

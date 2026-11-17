@@ -1,6 +1,6 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
-import { type z } from "zod";
+import { ZodError, type z } from "zod";
 export interface Model {
   generate<T>(task: string, schema: z.ZodType<T>, data: unknown): Promise<T>;
 }
@@ -60,9 +60,52 @@ export class OpenRouterModel implements Model {
         cost: reply.response_metadata?.cost,
       });
       return result;
-    } catch {
+    } catch (error) {
+      const reason =
+        error instanceof ZodError
+          ? "invalid_structure"
+          : error instanceof SyntaxError
+            ? "invalid_json"
+            : "provider_or_context_error";
+      const safeFields = new Set([
+        "memories",
+        "key",
+        "category",
+        "content",
+        "value",
+        "scope",
+        "confidence",
+        "explicit",
+        "expiresAt",
+        "supersedesId",
+        "evidence",
+        "type",
+        "recipientId",
+        "plan",
+        "activityId",
+        "catalogHash",
+        "start",
+        "end",
+        "participantIds",
+        "proposalHash",
+        "recommendations",
+        "explanation",
+      ]);
+      const issues =
+        error instanceof ZodError
+          ? error.issues.map((issue) => ({
+              code: issue.code,
+              path: issue.path.map((part) =>
+                typeof part === "number" || safeFields.has(part)
+                  ? part
+                  : "[field]",
+              ),
+            }))
+          : undefined;
       // Provider errors may contain request bodies/credentials; never log raw errors.
       log("model_failure", {
+        reason,
+        issues,
         model: process.env.OPENROUTER_MODEL,
         latencyMs: Date.now() - started,
       });

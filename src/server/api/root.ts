@@ -1,5 +1,7 @@
 import {
   scoutRouter,
+  activityRouter,
+  peopleRouter,
   memoryRouter,
   profileRouter,
   sidequestRouter,
@@ -15,6 +17,8 @@ import { createCallerFactory, createTRPCRouter } from "@/server/api/trpc";
 export const appRouter = createTRPCRouter({
   post: postRouter,
   scout: scoutRouter,
+  activity: activityRouter,
+  people: peopleRouter,
   memory: memoryRouter,
   profile: profileRouter,
   sidequest: sidequestRouter,

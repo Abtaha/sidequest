@@ -1,10 +1,11 @@
-import { and, eq, desc, or, sql, gt } from "drizzle-orm";
+import { and, eq, desc, or, sql, gt, inArray, gte, ne } from "drizzle-orm";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 import * as s from "@/server/db/schema";
 import { services } from "@/server/sidequest/services";
 import { constraintsSchema, DomainError } from "@/server/sidequest/types";
+import { checkContacts } from "@/server/sidequest/constraints";
 import { lock } from "@/server/sidequest/storage";
 // Domain errors carry public-safe messages. Database/provider details never reach clients.
 const p = protectedProcedure.use(async ({ next }) => {
@@ -142,6 +143,122 @@ export const memoryRouter = createTRPCRouter({
     }),
 });
 export const profileRouter = createTRPCRouter({
+  onboard: p
+    .input(
+      z.object({
+        requestId: z.string().uuid(),
+        interests: z.array(z.string().min(1).max(80)).min(2).max(12),
+        socialStyle: z.string().max(80),
+        budget: z.string().max(80),
+        optIn: z.boolean(),
+        windows: z
+          .array(
+            z
+              .object({ start: z.date(), end: z.date() })
+              .refine((w) => w.end > w.start, "Invalid availability"),
+          )
+          .min(1)
+          .max(30),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.transaction(async (tx) => {
+        const userId = ctx.session.user.id;
+        await lock(tx, `profile:${userId}`);
+        await lock(tx, `memory:${userId}`);
+        const [prior] = await tx
+          .select({ id: s.scoutMessages.id })
+          .from(s.scoutMessages)
+          .where(
+            and(
+              eq(s.scoutMessages.userId, userId),
+              eq(s.scoutMessages.requestId, input.requestId),
+              eq(s.scoutMessages.role, "user"),
+            ),
+          );
+        if (prior) return { saved: true };
+        await tx
+          .insert(s.profiles)
+          .values({ userId, discoverable: input.optIn, sharing: input.optIn })
+          .onConflictDoUpdate({
+            target: s.profiles.userId,
+            set: {
+              discoverable: input.optIn,
+              sharing: input.optIn,
+              updatedAt: new Date(),
+            },
+          });
+        await tx
+          .delete(s.availability)
+          .where(eq(s.availability.userId, userId));
+        await tx
+          .insert(s.availability)
+          .values(input.windows.map((w) => ({ userId, ...w })));
+        const [conversation] = await tx
+          .insert(s.scoutConversations)
+          .values({ userId })
+          .returning();
+        const content = `My interests: ${input.interests.join(", ")}. Social preference: ${input.socialStyle}. Usual budget preference: ${input.budget}.`;
+        const [source] = await tx
+          .insert(s.scoutMessages)
+          .values({
+            userId,
+            conversationId: conversation!.id,
+            role: "user",
+            content,
+            requestId: input.requestId,
+            status: "COMPLETE",
+          })
+          .returning();
+        const choices = [
+          ...input.interests.map((interest) => ({
+            key: `interest:${interest.toLowerCase()}`,
+            category: "INTEREST" as const,
+            content: `Enjoys ${interest}`,
+          })),
+          {
+            key: "social:group-preference",
+            category: "SOCIAL_PREFERENCE" as const,
+            content: `Preferred group size: ${input.socialStyle}`,
+          },
+          {
+            key: "budget:preference",
+            category: "PREFERENCE" as const,
+            content: `Usual budget preference: ${input.budget}`,
+          },
+        ];
+        for (const choice of choices) {
+          await tx
+            .update(s.userMemories)
+            .set({ status: "SUPERSEDED", updatedAt: new Date() })
+            .where(
+              and(
+                eq(s.userMemories.userId, userId),
+                eq(s.userMemories.key, choice.key),
+                eq(s.userMemories.status, "ACTIVE"),
+              ),
+            );
+          const [memory] = await tx
+            .insert(s.userMemories)
+            .values({
+              userId,
+              ...choice,
+              scope: "PERSISTENT",
+              confidence: 100,
+              explicit: true,
+              sourceMessageId: source!.id,
+              conversationId: conversation!.id,
+            })
+            .returning();
+          await tx.insert(s.memoryRevisions).values({
+            userId,
+            memoryId: memory!.id,
+            reason: "USER_ONBOARDING",
+          });
+        }
+        return { saved: true };
+      }),
+    ),
   get: p.query(async ({ ctx }) => {
     const [profile] = await ctx.db
       .select()
@@ -237,9 +354,13 @@ export const sidequestRouter = createTRPCRouter({
     .mutation(({ ctx, input }) =>
       services().negotiation.create(ctx.session.user.id, input),
     ),
-  list: p.query(({ ctx }) =>
-    ctx.db
-      .select({ sidequest: s.sidequests, negotiation: s.negotiations })
+  list: p.query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select({
+        sidequest: s.sidequests,
+        negotiation: s.negotiations,
+        proposal: s.proposals,
+      })
       .from(s.sidequests)
       .leftJoin(
         s.agentConversations,
@@ -249,6 +370,10 @@ export const sidequestRouter = createTRPCRouter({
         s.negotiations,
         eq(s.negotiations.conversationId, s.agentConversations.id),
       )
+      .leftJoin(
+        s.proposals,
+        eq(s.proposals.id, s.negotiations.activeProposalId),
+      )
       .where(
         or(
           eq(s.sidequests.ownerId, ctx.session.user.id),
@@ -256,8 +381,12 @@ export const sidequestRouter = createTRPCRouter({
         ),
       )
       .orderBy(desc(s.sidequests.createdAt))
-      .limit(100),
-  ),
+      .limit(100);
+    return rows.map((row) => ({
+      ...row,
+      negotiation: row.negotiation ? publicState(row.negotiation) : null,
+    }));
+  }),
   get: p.input(idInput).query(async ({ ctx, input }) => {
     const [quest] = await ctx.db
       .select()
@@ -307,6 +436,10 @@ export const sidequestRouter = createTRPCRouter({
       ctx.session.user.id,
       input.id,
     );
+    const participants = await ctx.db
+      .select({ id: s.user.id, name: s.user.name })
+      .from(s.user)
+      .where(inArray(s.user.id, conversation.participants));
     const proposals = await ctx.db
       .select()
       .from(s.proposals)
@@ -335,6 +468,7 @@ export const sidequestRouter = createTRPCRouter({
       failure: n.failure,
       activeProposalId: n.activeProposalId,
       participants: conversation.participants,
+      participantNames: participants,
       proposals,
       approvals,
       events: events.filter(
@@ -394,4 +528,55 @@ export const sidequestRouter = createTRPCRouter({
         .negotiation.revise(ctx.session.user.id, input)
         .then(publicState),
     ),
+});
+
+export const activityRouter = createTRPCRouter({
+  list: p.query(({ ctx }) =>
+    ctx.db
+      .select()
+      .from(s.activities)
+      .where(gte(s.activities.end, new Date()))
+      .orderBy(s.activities.start)
+      .limit(100),
+  ),
+});
+export const peopleRouter = createTRPCRouter({
+  list: p.query(async ({ ctx }) => {
+    const [own] = await ctx.db
+      .select()
+      .from(s.profiles)
+      .where(eq(s.profiles.userId, ctx.session.user.id));
+    if (!own?.discoverable || !own.sharing) return [];
+    const candidates = await ctx.db
+      .select({
+        id: s.user.id,
+        name: s.user.name,
+        blocked: s.profiles.blockedUsers,
+        constraints: s.profiles.constraints,
+      })
+      .from(s.profiles)
+      .innerJoin(s.user, eq(s.user.id, s.profiles.userId))
+      .where(
+        and(
+          eq(s.profiles.discoverable, true),
+          eq(s.profiles.sharing, true),
+          eq(s.profiles.circle, own.circle),
+          ne(s.profiles.userId, own.userId),
+        ),
+      )
+      .limit(100);
+    const service = services().negotiation;
+    const visible: { id: string; name: string }[] = [];
+    for (const candidate of candidates) {
+      try {
+        checkContacts(
+          await service.participants([own.userId, candidate.id], {}),
+        );
+        visible.push({ id: candidate.id, name: candidate.name });
+      } catch {
+        /* Bilateral exclusions also cover learned hard boundaries. */
+      }
+    }
+    return visible;
+  }),
 });

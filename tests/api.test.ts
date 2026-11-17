@@ -123,3 +123,60 @@ it("isolates memory edit/delete operations across sessions", async () => {
     }),
   ).rejects.toMatchObject({ code: "NOT_FOUND" });
 });
+it("persists onboarding choices, source messages and dated availability idempotently", async () => {
+  const { user, userMemories, availability, scoutMessages } =
+    await import("../src/server/db/schema");
+  const { eq } = await import("drizzle-orm");
+  const id = `onboarding-${randomUUID()}`;
+  await f.db
+    .insert(user)
+    .values({
+      id,
+      name: "Synthetic onboarding user",
+      email: `${id}@example.invalid`,
+    });
+  const api = caller(id),
+    input = {
+      requestId: randomUUID(),
+      interests: ["Games", "Music"],
+      socialStyle: "Small groups",
+      budget: "Under ₩10,000",
+      optIn: true,
+      windows: [
+        {
+          start: new Date("2099-01-03T09:00:00Z"),
+          end: new Date("2099-01-03T12:00:00Z"),
+        },
+      ],
+    };
+  await api.profile.onboard(input);
+  await api.profile.onboard(input);
+  const profile = await api.profile.get();
+  expect(profile.profile?.sharing).toBe(true);
+  expect(profile.profile?.discoverable).toBe(true);
+  expect(
+    await f.db.select().from(userMemories).where(eq(userMemories.userId, id)),
+  ).toHaveLength(4);
+  expect(
+    await f.db.select().from(availability).where(eq(availability.userId, id)),
+  ).toHaveLength(1);
+  expect(
+    await f.db.select().from(scoutMessages).where(eq(scoutMessages.userId, id)),
+  ).toHaveLength(1);
+  expect(profile.profile?.constraints.maxCost).toBeUndefined();
+});
+it("exposes only permitted public people and strips private negotiation state from lists", async () => {
+  const api = caller(syntheticIds[0]);
+  const people = await api.people.list();
+  expect(people.length).toBeGreaterThan(0);
+  for (const person of people)
+    expect(Object.keys(person).sort()).toEqual(["id", "name"]);
+  const rows = await api.sidequest.list();
+  for (const row of rows) {
+    if (row.negotiation) {
+      expect(row.negotiation).not.toHaveProperty("constraints");
+      expect(row.negotiation).not.toHaveProperty("pendingAction");
+      expect(row.negotiation).not.toHaveProperty("leaseOwner");
+    }
+  }
+});
