@@ -3,8 +3,11 @@
  * for Docker builds.
  */
 import "./src/env.js";
+import { fileURLToPath } from "node:url";
 
 /** @type {import("next").NextConfig} */
-const config = {};
+const config = {
+  outputFileTracingRoot: fileURLToPath(new URL(".", import.meta.url)),
+};
 
 export default config;

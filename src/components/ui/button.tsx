@@ -41,14 +41,15 @@ const buttonVariants = cva(
 
 function Button({
   className,
+  design = false,
   variant = "default",
   size = "default",
   ...props
-}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants> & { design?: boolean }) {
   return (
     <ButtonPrimitive
       data-slot="button"
-      className={cn(buttonVariants({ variant, size, className }))}
+      className={design ? cn("cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#71956f] disabled:cursor-not-allowed", className) : cn(buttonVariants({ variant, size, className }))}
       {...props}
     />
   )
