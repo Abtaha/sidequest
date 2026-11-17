@@ -25,8 +25,7 @@ export const activities: Activity[] = [
   {
     id: "pottery",
     title: "Beginner pottery night",
-    image:
-      "https://images.unsplash.com/photo-1565193298357-c5bfb62bcd73?auto=format&fit=crop&w=1000&q=85",
+    image: "/images/photo-1422246358533-95dcd3d48961.jpg",
     match: 92,
     people: ["Nina", "Owen"],
     date: "Thursday, May 30",
