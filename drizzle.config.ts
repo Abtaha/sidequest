@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { type Config } from "drizzle-kit";
 
 import { env } from "@/env";
@@ -8,5 +9,5 @@ export default {
   dbCredentials: {
     url: env.DATABASE_URL,
   },
-  tablesFilter: ["sidequest_*"],
+  out: "./drizzle",
 } satisfies Config;

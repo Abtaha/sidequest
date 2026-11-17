@@ -14,6 +14,10 @@ export const env = createEnv({
     BETTER_AUTH_GITHUB_CLIENT_ID: z.string(),
     BETTER_AUTH_GITHUB_CLIENT_SECRET: z.string(),
     DATABASE_URL: z.string().url(),
+    OPENROUTER_API_KEY: z.string().optional(),
+    OPENROUTER_MODEL: z.string().optional(),
+    SIDEQUEST_MAX_LLM_CALLS: z.coerce.number().int().min(1).max(100).optional(),
+    SIDEQUEST_TOKEN_BUDGET: z.coerce.number().int().min(1).optional(),
     NODE_ENV: z
       .enum(["development", "test", "production"])
       .default("development"),
@@ -38,6 +42,10 @@ export const env = createEnv({
     BETTER_AUTH_GITHUB_CLIENT_SECRET:
       process.env.BETTER_AUTH_GITHUB_CLIENT_SECRET,
     DATABASE_URL: process.env.DATABASE_URL,
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+    OPENROUTER_MODEL: process.env.OPENROUTER_MODEL,
+    SIDEQUEST_MAX_LLM_CALLS: process.env.SIDEQUEST_MAX_LLM_CALLS,
+    SIDEQUEST_TOKEN_BUDGET: process.env.SIDEQUEST_TOKEN_BUDGET,
     NODE_ENV: process.env.NODE_ENV,
   },
   /**
