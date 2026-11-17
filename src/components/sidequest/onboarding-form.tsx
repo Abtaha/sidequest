@@ -1,7 +1,10 @@
 "use client";
+import { formText } from "@/lib/sidequest-data";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { api } from "@/trpc/react";
+import { datedAvailability } from "@/lib/sidequest-data";
 import { Input } from "@/components/ui/input";
 const interests = [
     "Food & coffee",
@@ -13,9 +16,18 @@ const interests = [
     "Study sessions",
     "Volunteering",
   ],
-  availability = ["Weekday mornings", "Weekday afternoons", "Weekday evenings", "Weekends"];
+  availability = [
+    "Weekday mornings",
+    "Weekday afternoons",
+    "Weekday evenings",
+    "Weekends",
+  ];
 function Eyebrow({ children }: { children: React.ReactNode }) {
-  return <p className="text-xs font-bold uppercase tracking-[0.15em] text-[#6b866f]">{children}</p>;
+  return (
+    <p className="text-xs font-bold tracking-[0.15em] text-[#6b866f] uppercase">
+      {children}
+    </p>
+  );
 }
 function Heading({ children }: { children: React.ReactNode }) {
   return (
@@ -25,19 +37,45 @@ function Heading({ children }: { children: React.ReactNode }) {
   );
 }
 function Description({ children }: { children: React.ReactNode }) {
-  return <p className="mt-4 max-w-xl text-[15px] leading-6 text-[#6c776f]">{children}</p>;
+  return (
+    <p className="mt-4 max-w-xl text-[15px] leading-6 text-[#6c776f]">
+      {children}
+    </p>
+  );
 }
-function Choice({ name, value, label }: { name: string; value: string; label: string }) {
+function Choice({
+  name,
+  value,
+  label,
+}: {
+  name: string;
+  value: string;
+  label: string;
+}) {
   return (
     <label className="group relative cursor-pointer">
-      <Input design type="checkbox" name={name} value={value} className="peer sr-only" />
+      <Input
+        design
+        type="checkbox"
+        name={name}
+        value={value}
+        className="peer sr-only"
+      />
       <span className="flex min-h-14 items-center justify-center rounded-xl border border-[#d9dfd7] bg-white px-3 text-center text-sm font-semibold text-[#566259] transition group-hover:border-[#9ab590] peer-checked:border-[#244a36] peer-checked:bg-[#e3f1d4] peer-checked:text-[#244a36]">
         {label}
       </span>
     </label>
   );
 }
-function SelectField({ label, name, options }: { label: string; name: string; options: string[] }) {
+function SelectField({
+  label,
+  name,
+  options,
+}: {
+  label: string;
+  name: string;
+  options: string[];
+}) {
   return (
     <label className="block">
       <span className="mb-2 block text-sm font-semibold">{label}</span>
@@ -58,16 +96,49 @@ function SelectField({ label, name, options }: { label: string; name: string; op
 }
 export default function OnboardingForm({ name }: { name: string }) {
   const router = useRouter(),
-    [step, setStep] = React.useState(1);
+    [step, setStep] = React.useState(1),
+    [error, setError] = React.useState("");
+  const requestId = React.useRef<string>(crypto.randomUUID());
+  const save = api.profile.onboard.useMutation();
   return (
     <form
       className="mx-auto w-full max-w-2xl"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (1 === step) {
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setError("");
+        const data = new FormData(event.currentTarget),
+          selected = data.getAll("interests").map(String);
+        if (selected.length < 2) {
+          setError("Choose at least two interests.");
+          return;
+        }
+        if (step === 1) {
           setStep(2);
-        } else {
+          return;
+        }
+        const windows = datedAvailability(
+          data.getAll("availability").map(String),
+        ).slice(0, 30);
+        if (!windows.length) {
+          setError("Choose at least one availability window.");
+          return;
+        }
+        try {
+          await save.mutateAsync({
+            requestId: requestId.current,
+            interests: selected,
+            socialStyle: formText(data, "socialStyle", "No preference"),
+            budget: formText(data, "budget", "Flexible"),
+            windows,
+            optIn: data.get("optIn") === "on",
+          });
           router.push("/onboarding/personalize");
+        } catch (error) {
+          setError(
+            error instanceof Error
+              ? error.message
+              : "Could not save your profile.",
+          );
         }
       }}
     >
@@ -98,7 +169,9 @@ export default function OnboardingForm({ name }: { name: string }) {
           {"?"}
         </Heading>
         <Description>
-          {"Pick at least two. Scout will use these as conversation starters, not rigid labels."}
+          {
+            "Pick at least two. Scout will use these as conversation starters, not rigid labels."
+          }
         </Description>
         <div className="mt-7 grid grid-cols-2 gap-3 sm:grid-cols-3">
           {interests.map((e) => (
@@ -118,7 +191,12 @@ export default function OnboardingForm({ name }: { name: string }) {
           <SelectField
             label="Ideal group size"
             name="socialStyle"
-            options={["One-on-one", "Small groups", "The more the merrier", "No preference"]}
+            options={[
+              "One-on-one",
+              "Small groups",
+              "The more the merrier",
+              "No preference",
+            ]}
           />
           <SelectField
             label="Usual budget"
@@ -127,7 +205,9 @@ export default function OnboardingForm({ name }: { name: string }) {
           />
         </div>
         <fieldset className="mt-7">
-          <legend className="mb-3 text-sm font-semibold">{"When are you normally free?"}</legend>
+          <legend className="mb-3 text-sm font-semibold">
+            {"When are you normally free?"}
+          </legend>
           <div className="grid grid-cols-2 gap-3">
             {availability.map((e) => (
               <Choice key={e} name="availability" value={e} label={e} />
@@ -135,6 +215,24 @@ export default function OnboardingForm({ name }: { name: string }) {
           </div>
         </fieldset>
       </div>
+      {step === 2 && (
+        <>
+          <p className="mt-4 text-xs text-[#627067]">
+            These choices create dated availability for the next two weeks. You
+            can edit exact dates in Settings.
+          </p>
+          <label className="mt-5 flex gap-3 text-sm">
+            <input type="checkbox" name="optIn" /> Allow Scout to discover
+            people in my campus circle and share the necessary planning
+            constraints with their Scouts.
+          </label>
+        </>
+      )}
+      {error && (
+        <p role="alert" className="mt-4 text-sm text-red-700">
+          {error}
+        </p>
+      )}
       <div className="mt-10 flex items-center justify-between">
         <Button
           design
@@ -147,6 +245,7 @@ export default function OnboardingForm({ name }: { name: string }) {
         <Button
           design
           type="submit"
+          disabled={save.isPending}
           className="rounded-xl bg-[#244a36] px-6 py-3 text-sm font-bold text-white"
         >
           {"Continue"}

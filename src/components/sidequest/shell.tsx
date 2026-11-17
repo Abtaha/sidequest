@@ -1,9 +1,12 @@
 "use client";
+import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { authClient } from "@/server/better-auth/client";
 import type { NavigationProps, HeaderProps } from "./types";
 import { navigation } from "./data";
 import { Button } from "@/components/ui/button";
 import { Icon } from "./icons";
-import { Logo, NotificationItem } from "./shared";
+import { Logo } from "./shared";
 export function Sidebar({
   active,
   onNavigate,
@@ -11,6 +14,8 @@ export function Sidebar({
 }: NavigationProps & {
   onSettings: () => void;
 }) {
+  const router = useRouter(),
+    queryClient = useQueryClient();
   return (
     <aside className="fixed inset-y-0 left-0 z-20 hidden w-[232px] flex-col border-r border-[#dfe2da] bg-[#fbfcf8] px-4 py-6 lg:flex">
       <Logo />
@@ -39,11 +44,10 @@ export function Sidebar({
           </div>
         </div>
         <p className="text-xs leading-5 text-white/70">
-          {"Your taste map is 72% complete. Every choice makes suggestions more useful."}
+          {
+            "Your Scout learns from the preferences you share. Review or remove its memories anytime."
+          }
         </p>
-        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/15">
-          <div className="h-full w-[72%] rounded-full bg-[#c9ed93]" />
-        </div>
       </div>
       <div className="mt-3 flex items-center justify-between px-3 py-2 text-sm text-[#657069]">
         <Button
@@ -55,9 +59,20 @@ export function Sidebar({
           <Icon name="settings" className="h-[18px] w-[18px]" />
           {"Settings"}
         </Button>
-        <a href="/login" className="text-xs font-semibold hover:text-[#244a36]">
-          {"Log out"}
-        </a>
+        <Button
+          design
+          onClick={async () => {
+            const result = await authClient.signOut();
+            if (!result.error) {
+              queryClient.clear();
+              router.replace("/login");
+              router.refresh();
+            } else onSettings();
+          }}
+          className="text-xs font-semibold hover:text-[#244a36]"
+        >
+          Log out
+        </Button>
       </div>
     </aside>
   );
@@ -66,90 +81,55 @@ export function Header({
   userName,
   onNotifications,
   showNotifications,
-  hikingFound,
-  hikingRescheduled,
-  onHikingClick,
+  notifications,
+  onNotification,
+  onSettings,
 }: HeaderProps) {
   return (
-    <header className="sticky top-0 z-10 flex h-[74px] items-center justify-between border-b border-[#dfe2da] bg-[#fbfcf8]/90 px-5 backdrop-blur md:px-9">
-      <div className="lg:hidden">
-        <Logo compact={true} />
-      </div>
-      <div className="hidden md:block">
-        <p className="text-sm text-[#778079]">{"Friday, May 24"}</p>
-      </div>
+    <header className="relative z-20 flex items-center justify-between border-b border-[#dfe2da] bg-[#fbfcf8] px-5 py-5 md:px-9">
+      <Logo compact />
       <div className="relative flex items-center gap-3">
         <Button
           design
           onClick={onNotifications}
-          className="relative grid h-10 w-10 place-items-center rounded-full border border-[#dfe2da] bg-white text-[#465049]"
           aria-label="Notifications"
-          type="button"
+          className="relative grid h-10 w-10 place-items-center rounded-full border bg-white"
         >
-          <Icon name="bell" className="h-[18px] w-[18px]" />
-          <span className="absolute right-2 top-2 h-2 w-2 rounded-full border-2 border-white bg-[#ef785d]" />
+          <Icon name="bell" />
+          {notifications.length > 0 && (
+            <span className="absolute top-2 right-2 h-2 w-2 rounded-full bg-[#ef785d]" />
+          )}
         </Button>
-        <div className="grid h-9 w-9 place-items-center rounded-full bg-[#d9c2b3] text-xs font-bold text-[#4c4039]">
+        <Button
+          design
+          onClick={onSettings}
+          aria-label="Open profile settings"
+          title={userName}
+          className="grid h-9 w-9 place-items-center rounded-full bg-[#d9c2b3] text-xs font-bold"
+        >
           {userName.slice(0, 1).toUpperCase()}
-        </div>
+        </Button>
         {showNotifications && (
-          <div className="absolute right-0 top-12 w-80 rounded-2xl border border-[#dfe2da] bg-white p-3 shadow-2xl shadow-black/10">
-            <p className="px-2 py-1 text-xs font-bold uppercase tracking-[0.12em] text-[#7f8b82]">
-              {"Notifications"}
-            </p>
-            {hikingRescheduled && (
+          <div className="absolute top-12 right-0 w-80 rounded-2xl border bg-white p-4 shadow-xl">
+            <h2 className="text-sm font-semibold">Plan updates</h2>
+            {notifications.map((item) => (
               <Button
                 design
-                onClick={onHikingClick}
-                className="mt-2 w-full rounded-xl bg-[#dff4c7] p-3 text-left transition hover:bg-[#d3edb5]"
-                type="button"
+                key={item.id}
+                onClick={() => onNotification(item.id)}
+                className="mt-3 w-full rounded-xl bg-[#eef2e8] p-3 text-left text-sm"
               >
-                <div className="flex items-center gap-2">
-                  <span className="grid h-7 w-7 place-items-center rounded-full bg-[#244a36] text-[#c9ed93]">
-                    <Icon name="check" className="h-3.5 w-3.5" />
-                  </span>
-                  <p className="text-xs font-bold uppercase tracking-[0.1em] text-[#315c3e]">
-                    {"Agents negotiated successfully"}
-                  </p>
-                </div>
-                <p className="mt-2 text-sm font-semibold">{"9:30 AM works for everyone"}</p>
-                <p className="mt-1 text-xs leading-5 text-[#637068]">
-                  {"The Saturday hike can move from 9:00 to 9:30 AM."}
+                <p className="font-semibold">{item.title}</p>
+                <p className="mt-1 capitalize">
+                  {item.status.toLowerCase().replaceAll("_", " ")}
                 </p>
               </Button>
+            ))}
+            {!notifications.length && (
+              <p className="mt-3 text-sm text-[#627067]">
+                No proposals awaiting your review.
+              </p>
             )}
-            {hikingFound && (
-              <Button
-                design
-                onClick={onHikingClick}
-                className="mt-2 w-full rounded-xl bg-[#e7f2dc] p-3 text-left transition hover:bg-[#dceccb]"
-                type="button"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="grid h-7 w-7 place-items-center rounded-full bg-[#244a36] text-[#c9ed93]">
-                    <Icon name="spark" className="h-3.5 w-3.5" />
-                  </span>
-                  <p className="text-xs font-bold uppercase tracking-[0.1em] text-[#5d7a61]">
-                    {"Activity found"}
-                  </p>
-                </div>
-                <p className="mt-2 text-sm font-semibold">{"Saturday morning hike"}</p>
-                <p className="mt-1 text-xs leading-5 text-[#637068]">
-                  {"Scout found a nearby short trail and negotiated a time that works."}
-                </p>
-              </Button>
-            )}
-            <p className="mt-3 border-t border-[#e5e8e2] px-2 pb-1 pt-3 text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a938d]">
-              {"While you were away"}
-            </p>
-            <NotificationItem
-              title="Maya is free Saturday"
-              copy="Your overlap just opened a 3-hour window."
-            />
-            <NotificationItem
-              title="Coffee with Elena"
-              copy="Scout found a time that works for both of you."
-            />
           </div>
         )}
       </div>

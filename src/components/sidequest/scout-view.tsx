@@ -1,51 +1,84 @@
 "use client";
 import * as React from "react";
-import type { ScoutProps, MemoryProps } from "./types";
-
+import { api, type RouterOutputs, type RouterInputs } from "@/trpc/react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Icon } from "./icons";
+import { constraintsSchema } from "@/lib/sidequest-constraints";
+import { localDateValue } from "@/lib/sidequest-data";
 import { PageHeading } from "./shared";
+import type { View } from "./types";
+type MemoryRecord = RouterOutputs["memory"]["list"][number];
 export function ScoutView({
   userName,
   onNavigate,
-  onActivityFound,
-  memories,
-  onMemoriesChange,
-}: ScoutProps) {
+}: {
+  userName: string;
+  onNavigate: (view: View) => void;
+}) {
+  const utils = api.useUtils();
+  const conversations = api.scout.listConversations.useQuery();
+  const [selection, setSelection] = React.useState<string>();
+  const conversationId =
+    selection === "new"
+      ? undefined
+      : (selection ?? conversations.data?.[0]?.id);
+  const conversation = api.scout.getConversation.useQuery(
+    { id: conversationId ?? "" },
+    { enabled: !!conversationId },
+  );
+  const [afterId, setAfterId] = React.useState<string>();
+  const memories = api.memory.list.useQuery({ limit: 30, afterId });
   const [draft, setDraft] = React.useState(""),
-    [editingMemories, setEditingMemories] = React.useState(false),
-    [messages, setMessages] = React.useState([
-      {
-        from: "scout",
-        text: `Hey ${userName.split(" ")[0]}. I’m here whenever you want to add context, rethink a plan, or tell me what kind of social energy you have today.`,
-      },
-    ]);
-  function sendMessage(e = draft, t = true) {
-    const s = e.trim();
-    if (!s) return;
-    const a = s.toLowerCase();
-    let n =
-        "Got it. I’ll use that as private context when I compare future plans and people for you.";
-    if (a.includes("plan") || a.includes("change")) {
-      n =
-        "I can help with that. I’ve noted what you want changed—open Plans if you want to apply it to a specific SideQuest.";
-    } else {
-      if (a.includes("free") || a.includes("available")) {
-        n =
-          "Thanks. I’ve updated the availability I’ll use for suggestions. I’ll still ask before confirming anything.";
-      } else {
-        if (a.includes("don’t") || a.includes("avoid") || a.includes("never")) {
-          n =
-            "Understood. I’ll treat that as a boundary and avoid suggesting plans that conflict with it.";
-        }
-      }
+    [editing, setEditing] = React.useState(false),
+    [error, setError] = React.useState("");
+  const retry = React.useRef<{
+    content: string;
+    conversationId?: string;
+    requestId: string;
+  } | null>(null);
+  const send = api.scout.sendMessage.useMutation();
+  const update = api.memory.update.useMutation(),
+    remove = api.memory.delete.useMutation();
+  async function sendMessage(content = draft) {
+    if (!content.trim() || send.isPending) return;
+    if (
+      retry.current?.content !== content ||
+      retry.current.conversationId !== conversationId
+    )
+      retry.current = {
+        content,
+        conversationId,
+        requestId: crypto.randomUUID(),
+      };
+    setError("");
+    try {
+      const result = await send.mutateAsync(retry.current);
+      setSelection(result.conversationId);
+      setDraft("");
+      retry.current = null;
+      await Promise.all([utils.scout.invalidate(), utils.memory.invalidate()]);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Scout could not reply. Retry your message.",
+      );
     }
-    setMessages((e) => [...e, { from: "user", text: s }, { from: "scout", text: n }]);
-    setDraft("");
-    if (t) {
-      onActivityFound();
+  }
+  async function changeMemory(
+    memory: MemoryRecord,
+    content: string,
+    constraints?: NonNullable<RouterInputs["memory"]["update"]["constraints"]>,
+  ) {
+    setError("");
+    try {
+      await update.mutateAsync({ id: memory.id, content, constraints });
+      await utils.memory.invalidate();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Could not update memory.",
+      );
     }
   }
   return (
@@ -53,192 +86,459 @@ export function ScoutView({
       <PageHeading
         eyebrow="Your personal agent"
         title="Talk it through with Scout"
-        copy="Add context, change your preferences, or ask Scout to help with a plan. This conversation stays private unless you approve an action."
+        copy="Share context, update a preference, or think through a plan. Your private memory persists across conversations."
       />
+      {(error.length > 0 ||
+        conversations.isError ||
+        conversation.isError ||
+        memories.isError) && (
+        <p
+          role="alert"
+          className="mt-4 rounded-xl bg-red-50 p-4 text-sm text-red-800"
+        >
+          {error ||
+            (conversations.error?.message ??
+              conversation.error?.message ??
+              memories.error?.message)}
+        </p>
+      )}
       <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_300px]">
         <section className="flex min-h-[580px] flex-col overflow-hidden rounded-[26px] border border-[#dfe2da] bg-white">
-          <div className="flex items-center gap-3 border-b border-[#e3e6df] px-5 py-4">
+          <div className="flex flex-wrap items-center gap-3 border-b border-[#e3e6df] px-5 py-4">
             <div className="grid h-10 w-10 place-items-center rounded-full bg-[#244a36] text-[#c9ed93]">
-              <Icon name="spark" className="h-5 w-5" />
+              <Icon name="spark" />
             </div>
-            <div>
-              <h2 className="text-sm font-semibold">{"Scout"}</h2>
-              <p className="text-xs text-[#718077]">{"Ready to listen and help"}</p>
-            </div>
-            <span className="ml-auto flex items-center gap-2 text-xs font-medium text-[#5d7a61]">
-              <span className="h-2 w-2 rounded-full bg-[#76a85d]" />
-              {"Private"}
-            </span>
+            <h2 className="text-sm font-semibold">Scout</h2>
+            <label className="ml-auto text-xs">
+              Conversation{" "}
+              <select
+                aria-label="Scout conversation"
+                value={conversationId ?? "new"}
+                disabled={send.isPending}
+                onChange={(event) => {
+                  setSelection(event.target.value);
+                  setError("");
+                }}
+                className="ml-2 max-w-44 rounded-lg border p-2"
+              >
+                <option value="new">New conversation</option>
+                {conversations.data?.map((item, index) => (
+                  <option key={item.id} value={item.id}>
+                    {item.createdAt.toLocaleDateString()} · {index + 1}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button
+              design
+              disabled={send.isPending}
+              onClick={() => setSelection("new")}
+              className="rounded-lg bg-[#eef2e8] px-3 py-2 text-xs"
+            >
+              New
+            </Button>
           </div>
-          <div className="flex-1 space-y-4 overflow-y-auto p-5 md:p-6">
-            {messages.map((e, s) => (
+          <div
+            className="max-h-[60vh] flex-1 space-y-4 overflow-y-auto p-5 md:p-6"
+            role="log"
+            aria-label="Scout conversation messages"
+            aria-live="polite"
+          >
+            {conversation.isLoading && (
+              <p className="text-sm text-[#627067]">Loading conversation…</p>
+            )}
+            {!conversationId && (
+              <p className="rounded-2xl bg-[#eef2e8] p-4 text-sm">
+                Hey {userName.split(" ")[0]}. Tell me what makes a plan feel
+                right for you.
+              </p>
+            )}
+            {conversation.data?.messages.map((message) => (
               <div
-                key={`${e.from}-${s}`}
-                className={`flex ${"user" === e.from ? "justify-end" : "justify-start"}`}
+                key={message.id}
+                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 <div
-                  className={`max-w-[82%] rounded-2xl px-4 py-3 text-sm leading-6 ${"user" === e.from ? "rounded-br-md bg-[#244a36] text-white" : "rounded-bl-md bg-[#eef2e8] text-[#3f4b43]"}`}
+                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 whitespace-pre-wrap ${message.role === "user" ? "bg-[#244a36] text-white" : "bg-[#eef2e8] text-[#3f4b43]"}`}
                 >
-                  {e.text}
+                  {message.content}
+                  {message.status === "FAILED" && (
+                    <p className="mt-2 text-xs">
+                      Reply failed. Retry with the same message.
+                    </p>
+                  )}
                 </div>
               </div>
             ))}
+            {send.isPending && (
+              <p role="status" className="text-sm text-[#627067]">
+                Scout is thinking and updating your memory…
+              </p>
+            )}
           </div>
-          <div className="border-t border-[#e3e6df] p-4">
-            <div className="mb-3 flex gap-2 overflow-x-auto">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendMessage();
+            }}
+            className="border-t border-[#e3e6df] p-4"
+          >
+            <div className="mb-3 flex flex-wrap gap-2">
               {[
                 "I want to add more context",
                 "My availability changed",
                 "Help me change a plan",
-              ].map((e) => (
+              ].map((text) => (
                 <Button
+                  key={text}
                   design
-                  key={e}
-                  onClick={() => sendMessage(e, false)}
-                  className="whitespace-nowrap rounded-full bg-[#f0f2ec] px-3 py-2 text-xs font-semibold text-[#536351]"
                   type="button"
+                  onClick={() => setDraft(text)}
+                  className="rounded-full bg-[#f0f2ec] px-3 py-2 text-xs"
                 >
-                  {e}
+                  {text}
                 </Button>
               ))}
             </div>
-            <div className="flex items-end gap-2 rounded-2xl border border-[#d8ddd5] bg-[#fbfcf8] p-2 pl-4 focus-within:border-[#71956f]">
+            <div className="flex items-end gap-2 rounded-2xl border border-[#d8ddd5] bg-[#fbfcf8] p-2 pl-4">
               <Textarea
                 design
+                aria-label="Message Scout"
                 value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (!("Enter" !== e.key || e.shiftKey)) {
-                    e.preventDefault();
-                    sendMessage();
+                disabled={send.isPending}
+                maxLength={6000}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
+                    void sendMessage();
                   }
                 }}
                 rows={2}
-                placeholder="Tell Scout anything or ask for help..."
-                className="max-h-32 min-h-11 flex-1 resize-none bg-transparent py-2 text-sm leading-5 outline-none"
+                placeholder="Tell Scout anything or ask for help…"
+                className="flex-1 resize-none bg-transparent py-2 text-sm"
               />
               <Button
                 design
-                onClick={() => sendMessage()}
-                disabled={!draft.trim()}
-                className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#244a36] text-white transition disabled:cursor-not-allowed disabled:opacity-35"
+                type="submit"
+                disabled={send.isPending || !draft.trim()}
                 aria-label="Send message to Scout"
-                type="button"
+                className="grid h-11 w-11 place-items-center rounded-xl bg-[#244a36] text-white disabled:opacity-35"
               >
-                <Icon name="send" className="h-4 w-4" />
+                <Icon name="send" />
               </Button>
             </div>
-          </div>
+          </form>
         </section>
         <aside className="space-y-4">
           <div className="rounded-[22px] bg-[#e3ebd9] p-5">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#667661]">
-                {"Scout remembers"}
-              </p>
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-bold tracking-wider uppercase">
+                Scout remembers
+              </h2>
               <Button
                 design
-                onClick={() => setEditingMemories((e) => !e)}
-                className="flex items-center gap-1.5 rounded-lg bg-white/70 px-2.5 py-1.5 text-[11px] font-bold text-[#244a36]"
-                type="button"
+                onClick={() => setEditing(!editing)}
+                className="rounded-lg bg-white/70 px-3 py-2 text-xs"
               >
-                <Icon name={editingMemories ? "check" : "edit"} className="h-3.5 w-3.5" />
-                {editingMemories ? "Done" : "Edit"}
+                {editing ? "Done" : "Edit"}
               </Button>
             </div>
             <div className="mt-4 space-y-3">
-              {memories.map((e) => (
+              {memories.data?.map((memory) => (
                 <MemoryCard
-                  key={e.id}
-                  memory={e}
-                  editing={editingMemories}
-                  onChange={(t) => onMemoriesChange(memories.map((s) => (s.id === e.id ? t : s)))}
-                  onRemove={() => onMemoriesChange(memories.filter((t) => t.id !== e.id))}
+                  key={`${memory.id}:${editing}`}
+                  memory={memory}
+                  editing={editing}
+                  busy={update.isPending || remove.isPending}
+                  onSave={(content, constraints) =>
+                    void changeMemory(memory, content, constraints)
+                  }
+                  onDelete={async (deleteSource) => {
+                    setError("");
+                    try {
+                      await remove.mutateAsync({ id: memory.id, deleteSource });
+                      if (deleteSource) setSelection("new");
+                      await Promise.all([
+                        utils.memory.invalidate(),
+                        utils.scout.invalidate(),
+                      ]);
+                    } catch (error) {
+                      setError(
+                        error instanceof Error
+                          ? error.message
+                          : "Could not delete memory.",
+                      );
+                    }
+                  }}
                 />
               ))}
-              {!memories.length && (
-                <p className="rounded-xl border border-dashed border-[#adbea5] p-4 text-center text-xs leading-5 text-[#667661]">
-                  {"Scout is not remembering any profile context yet."}
+              {memories.data?.length === 0 && (
+                <p className="text-sm text-[#627067]">
+                  No memories yet. Tell Scout what you enjoy.
                 </p>
               )}
-              {editingMemories && (
-                <Button
-                  design
-                  onClick={() =>
-                    onMemoriesChange([
-                      ...memories,
-                      { id: `memory-${Date.now()}`, label: "New context", value: "" },
-                    ])
-                  }
-                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#91a788] px-3 py-3 text-xs font-bold text-[#315c3e]"
-                  type="button"
-                >
-                  <Icon name="plus" className="h-4 w-4" />
-                  {"Add something Scout should remember"}
-                </Button>
+            </div>
+            <div className="mt-3 flex gap-3 text-xs">
+              {afterId && (
+                <button onClick={() => setAfterId(undefined)}>
+                  First page
+                </button>
+              )}
+              {memories.data?.length === 30 && (
+                <button onClick={() => setAfterId(memories.data?.at(-1)?.id)}>
+                  More memories
+                </button>
               )}
             </div>
             <p className="mt-4 text-xs leading-5 text-[#61705f]">
-              {"These notes are private and stay updated while you use this prototype."}
+              Stored privately across sessions. To add a memory, tell Scout in
+              the conversation.
             </p>
           </div>
           <Button
             design
             onClick={() => onNavigate("Plans")}
-            className="flex w-full items-center justify-between rounded-[20px] border border-[#dfe2da] bg-white p-5 text-left"
-            type="button"
+            className="w-full rounded-[20px] border bg-white p-5 text-left text-sm"
           >
-            <div>
-              <p className="text-sm font-semibold">{"Need to change a plan?"}</p>
-              <p className="mt-1 text-xs text-[#737d76]">{"Open your upcoming SideQuests"}</p>
-            </div>
-            <Icon name="arrow" className="h-4 w-4 text-[#244a36]" />
+            Need to change a plan? Open Plans →
           </Button>
         </aside>
       </div>
     </div>
   );
 }
-export function MemoryCard({ memory, editing, onChange, onRemove }: MemoryProps) {
-  return editing ? (
+function MemoryCard({
+  memory,
+  editing,
+  busy,
+  onSave,
+  onDelete,
+}: {
+  memory: MemoryRecord;
+  editing: boolean;
+  busy: boolean;
+  onSave: (
+    content: string,
+    constraints?: NonNullable<RouterInputs["memory"]["update"]["constraints"]>,
+  ) => void;
+  onDelete: (deleteSource: boolean) => Promise<void>;
+}) {
+  const parsed = constraintsSchema.safeParse(memory.value);
+  const original = parsed.success ? parsed.data : {};
+  const [content, setContent] = React.useState(memory.content),
+    [maxCost, setMaxCost] = React.useState(original.maxCost?.toString() ?? ""),
+    [minGroup, setMinGroup] = React.useState(
+      original.minGroup?.toString() ?? "",
+    ),
+    [maxGroup, setMaxGroup] = React.useState(
+      original.maxGroup?.toString() ?? "",
+    ),
+    [windows, setWindows] = React.useState(
+      (original.windows ?? []).map((window) => ({
+        start: localDateValue(new Date(window.start)),
+        end: localDateValue(new Date(window.end)),
+      })),
+    ),
+    [deleteSource, setDeleteSource] = React.useState(false),
+    [error, setError] = React.useState("");
+  const hard =
+    memory.category === "CONSTRAINT" || memory.category === "AVAILABILITY";
+  return (
     <div className="rounded-xl bg-white/75 p-3">
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1 space-y-2">
-          <Input
-            design
-            value={memory.label}
-            onChange={(t) => onChange({ ...memory, label: t.target.value })}
-            placeholder="What kind of context?"
-            className="w-full bg-transparent text-[10px] font-bold uppercase tracking-[0.1em] text-[#7a8678] outline-none"
-          />
+      <p className="text-[10px] font-bold tracking-wide text-[#7a8678] uppercase">
+        {memory.category.replaceAll("_", " ")}
+      </p>
+      {editing ? (
+        <>
           <Textarea
             design
-            value={memory.value}
-            onChange={(t) => onChange({ ...memory, value: t.target.value })}
-            placeholder="Write anything Scout should remember"
-            rows={2}
-            className="w-full resize-none rounded-lg border border-[#d8e1d2] bg-white px-2.5 py-2 text-sm leading-5 text-[#344538] outline-none focus:border-[#71956f]"
+            aria-label={`Edit ${memory.category} memory`}
+            value={content}
+            onChange={(event) => setContent(event.target.value)}
+            maxLength={500}
+            rows={3}
+            className="mt-2 w-full rounded-lg border bg-white p-2 text-sm"
           />
-        </div>
-        <Button
-          design
-          onClick={onRemove}
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[#7f8b82] hover:bg-white hover:text-[#a04f43]"
-          aria-label={`Remove ${memory.label || "memory"}`}
-          type="button"
-        >
-          <Icon name="close" className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-    </div>
-  ) : (
-    <div className="rounded-xl bg-white/65 p-3">
-      <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-[#7a8678]">
-        {memory.label || "Personal context"}
-      </p>
-      <p className="mt-1 text-sm font-medium text-[#344538]">
-        {memory.value || "Nothing added yet"}
-      </p>
+          {hard && (
+            <div className="mt-3 space-y-2 text-xs">
+              <label className="block">
+                Budget ceiling (₩)
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={maxCost}
+                  onChange={(event) => setMaxCost(event.target.value)}
+                  className="mt-1 w-full rounded border p-2"
+                />
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label>
+                  Minimum people
+                  <input
+                    type="number"
+                    min={2}
+                    max={5}
+                    value={minGroup}
+                    onChange={(event) => setMinGroup(event.target.value)}
+                    className="mt-1 w-full rounded border p-2"
+                  />
+                </label>
+                <label>
+                  Maximum people
+                  <input
+                    type="number"
+                    min={2}
+                    max={5}
+                    value={maxGroup}
+                    onChange={(event) => setMaxGroup(event.target.value)}
+                    className="mt-1 w-full rounded border p-2"
+                  />
+                </label>
+              </div>
+              {windows.map((window, index) => (
+                <div key={index} className="rounded border p-2">
+                  <label>
+                    Available from
+                    <input
+                      type="datetime-local"
+                      value={window.start}
+                      onChange={(event) =>
+                        setWindows(
+                          windows.map((w, i) =>
+                            i === index
+                              ? { ...w, start: event.target.value }
+                              : w,
+                          ),
+                        )
+                      }
+                      className="mt-1 w-full rounded border p-1"
+                    />
+                  </label>
+                  <label>
+                    Until
+                    <input
+                      type="datetime-local"
+                      value={window.end}
+                      onChange={(event) =>
+                        setWindows(
+                          windows.map((w, i) =>
+                            i === index ? { ...w, end: event.target.value } : w,
+                          ),
+                        )
+                      }
+                      className="mt-1 w-full rounded border p-1"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setWindows(windows.filter((_, i) => i !== index))
+                    }
+                    className="mt-2 text-red-700"
+                  >
+                    Remove time window
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                disabled={windows.length >= 30}
+                onClick={() => setWindows([...windows, { start: "", end: "" }])}
+                className="text-[#315c3e] underline"
+              >
+                Add a time window
+              </button>
+              {original.excludedUsers?.length ||
+              original.excludedTags?.length ? (
+                <p>
+                  Other exclusions in this memory stay in place. Delete the
+                  memory to remove its restrictions.
+                </p>
+              ) : null}
+            </div>
+          )}
+          {error && (
+            <p role="alert" className="text-xs text-red-700">
+              {error}
+            </p>
+          )}
+          <Button
+            design
+            disabled={busy || !content.trim()}
+            onClick={() => {
+              try {
+                setError("");
+                const parsedWindows = windows.map((window) => ({
+                  start: new Date(window.start),
+                  end: new Date(window.end),
+                }));
+                if (
+                  parsedWindows.some(
+                    (window) =>
+                      !Number.isFinite(+window.start) ||
+                      !Number.isFinite(+window.end) ||
+                      window.end <= window.start,
+                  )
+                ) {
+                  setError(
+                    "Choose a valid start and end for each time window.",
+                  );
+                  return;
+                }
+                const value = hard
+                  ? {
+                      ...original,
+                      maxCost: maxCost === "" ? undefined : Number(maxCost),
+                      minGroup: minGroup === "" ? undefined : Number(minGroup),
+                      maxGroup: maxGroup === "" ? undefined : Number(maxGroup),
+                      windows: parsedWindows.length
+                        ? parsedWindows.map((window) => ({
+                            start: window.start.toISOString(),
+                            end: window.end.toISOString(),
+                          }))
+                        : undefined,
+                    }
+                  : undefined;
+                onSave(content, value);
+              } catch {
+                setError("Check the restriction values and time windows.");
+              }
+            }}
+            className="mt-2 rounded bg-[#244a36] px-3 py-2 text-xs text-white"
+          >
+            Save memory
+          </Button>
+          <label className="mt-3 flex gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={deleteSource}
+              onChange={(event) => setDeleteSource(event.target.checked)}
+            />{" "}
+            Also erase its source conversation
+          </label>
+          <Button
+            design
+            disabled={busy}
+            onClick={() => void onDelete(deleteSource)}
+            className="mt-2 text-xs text-red-700"
+          >
+            Delete memory
+          </Button>
+        </>
+      ) : (
+        <p className="mt-1 text-sm whitespace-pre-wrap">{memory.content}</p>
+      )}
+      {memory.expiresAt && (
+        <p className="mt-2 text-xs text-[#627067]">
+          Expires {memory.expiresAt.toLocaleString()}
+        </p>
+      )}
     </div>
   );
 }

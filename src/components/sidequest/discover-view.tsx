@@ -19,8 +19,10 @@ export function DiscoverView({
     <div className="mx-auto max-w-[1320px] px-5 py-8 md:px-9 md:py-10">
       <PageHeading
         eyebrow="Discover"
-        title={searchTerm ? `Ideas for “${searchTerm}”` : "Plans that feel like you"}
-        copy="Scout ranked these using your interests, budget, social style, and the people who are actually free."
+        title={
+          searchTerm ? `Ideas for “${searchTerm}”` : "Plans that feel like you"
+        }
+        copy="Explore the current activity catalog. Ask Scout to negotiate an option with people who have opted into planning."
       />
       <div className="mt-8 flex flex-col gap-4 rounded-2xl border border-[#dfe2da] bg-white p-3 sm:flex-row sm:items-center">
         <div className="flex flex-1 items-center gap-3 px-2">
@@ -43,14 +45,22 @@ export function DiscoverView({
             </Button>
           )}
         </div>
-        <div className="flex items-center gap-2 overflow-x-auto border-t border-[#e5e8e2] pt-3 sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0">
+        <div className="flex items-center gap-2 overflow-x-auto border-t border-[#e5e8e2] pt-3 sm:border-t-0 sm:border-l sm:pt-0 sm:pl-3">
           <Icon name="filter" className="h-4 w-4 shrink-0 text-[#758078]" />
-          {["All", "Outdoors", "Arts & culture", "Sports", "Food", "Games"].map((e) => (
+          {[
+            "All",
+            "Outdoors",
+            "Arts & culture",
+            "Sports",
+            "Food",
+            "Games",
+            "Music",
+          ].map((e) => (
             <Button
               design
               key={e}
               onClick={() => setCategory(e)}
-              className={`whitespace-nowrap rounded-full px-3 py-2 text-xs font-semibold ${category === e ? "bg-[#244a36] text-white" : "bg-[#f0f2ec] text-[#657069]"}`}
+              className={`rounded-full px-3 py-2 text-xs font-semibold whitespace-nowrap ${category === e ? "bg-[#244a36] text-white" : "bg-[#f0f2ec] text-[#657069]"}`}
               type="button"
             >
               {e}
@@ -61,9 +71,11 @@ export function DiscoverView({
       <div className="mt-6 flex items-center justify-between">
         <p className="text-sm text-[#6f7972]">
           {activities.length}
-          {" strong matches"}
+          {" catalog activities"}
         </p>
-        <p className="text-xs font-semibold text-[#6f7972]">{"Sorted by compatibility"}</p>
+        <p className="text-xs font-semibold text-[#6f7972]">
+          {"Sorted by available time"}
+        </p>
       </div>
       {activities.length ? (
         <div className="mt-5 grid gap-5 md:grid-cols-2 xl:grid-cols-3">

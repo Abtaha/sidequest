@@ -1,8 +1,8 @@
 "use client";
 import * as React from "react";
-import type { Activity, View } from "./types";
-import { activities, hikingActivity, initialMemories, initialPlans } from "./data";
-import { Toast } from "./shared";
+import { api, type RouterOutputs } from "@/trpc/react";
+import { activityImage, categoryNames } from "@/lib/sidequest-data";
+import type { Activity, Person, View } from "./types";
 import { Sidebar, Header, MobileNav } from "./shell";
 import { HomeView } from "./home-view";
 import { DiscoverView } from "./discover-view";
@@ -11,149 +11,322 @@ import { PeopleView } from "./people-view";
 import { ScoutView } from "./scout-view";
 import { ActivityDetails } from "./activity-details";
 import { SettingsDialog } from "./settings-dialog";
-export default function SideQuestApp({ userName }: { userName: string }) {
+import { NegotiationPanel } from "./negotiation-panel";
+function catalogActivity(
+  row: RouterOutputs["activity"]["list"][number],
+): Activity {
+  const category = categoryNames[row.category] ?? row.category;
+  return {
+    id: row.id,
+    title: row.title,
+    image: activityImage(category),
+    match: 0,
+    people: [],
+    date: row.start.toLocaleDateString(undefined, {
+      weekday: "long",
+      month: "short",
+      day: "numeric",
+    }),
+    time: `${row.start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} – ${row.end.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+    location: row.location,
+    price: `₩${row.cost.toLocaleString()}`,
+    category,
+    description: row.description,
+    reason: row.synthetic
+      ? "Synthetic demonstration activity; not a real venue or reservation."
+      : "Ask your Scouts to check this option for your group.",
+  };
+}
+export default function SideQuestApp({
+  userName,
+  userId,
+}: {
+  userName: string;
+  userId: string;
+}) {
+  const utils = api.useUtils();
+  const catalog = api.activity.list.useQuery(),
+    peopleQuery = api.people.list.useQuery();
+  const quests = api.sidequest.list.useQuery(undefined, {
+    refetchInterval: (query) =>
+      query.state.data?.some(
+        (row) =>
+          row.negotiation &&
+          ["DISCOVERING", "NEGOTIATING"].includes(row.negotiation.status),
+      )
+        ? 2000
+        : query.state.data?.some(
+              (row) =>
+                row.negotiation && row.negotiation.status !== "CANCELLED",
+            )
+          ? 5000
+          : false,
+  });
+  const create = api.sidequest.create.useMutation(),
+    start = api.sidequest.startNegotiation.useMutation();
+  const [error, setError] = React.useState("");
+  const resume = api.sidequest.resumeNegotiation.useMutation({
+    onSuccess: () => {
+      void utils.sidequest.invalidate();
+    },
+    onError: (error) => {
+      setError(error.message);
+      void utils.sidequest.invalidate();
+    },
+  });
   const [activeView, setActiveView] = React.useState<View>("Home"),
     [request, setRequest] = React.useState(""),
     [searchTerm, setSearchTerm] = React.useState(""),
-    [selectedActivity, setSelectedActivity] = React.useState<Activity | null>(null),
-    [plannedIds, setPlannedIds] = React.useState(initialPlans.map((e) => e.id)),
-    [invitedPeople, setInvitedPeople] = React.useState<string[]>([]),
     [category, setCategory] = React.useState("All"),
+    [selected, setSelected] = React.useState<Activity | null>(null),
+    [selectedNegotiation, setSelectedNegotiation] = React.useState<
+      string | null
+    >(null),
     [showNotifications, setShowNotifications] = React.useState(false),
-    [showSettings, setShowSettings] = React.useState(false),
-    [hikingFound, setHikingFound] = React.useState(false),
-    [hikingRescheduled, setHikingRescheduled] = React.useState(false),
-    [memories, setMemories] = React.useState(initialMemories),
-    [toast, setToast] = React.useState(""),
-    currentHike = hikingRescheduled
-      ? { ...hikingActivity, time: "9:30 AM – 11:30 AM" }
-      : hikingActivity,
-    plans = [...activities, currentHike].filter((e) => plannedIds.includes(e.id)),
-    filteredActivities = React.useMemo(() => {
-      const e = searchTerm.toLowerCase();
-      return activities.filter((t) => {
-        const s = "All" === category || t.category === category,
-          a =
-            !e ||
-            `${t.title} ${t.category} ${t.description} ${t.people.join(" ")}`
-              .toLowerCase()
-              .includes(e);
-        return s && a;
-      });
-    }, [category, searchTerm]);
-  function navigate(e: View) {
-    setActiveView(e);
-    setSelectedActivity(null);
+    [showSettings, setShowSettings] = React.useState(false);
+  const retry = React.useRef<{ signature: string; requestId: string } | null>(
+    null,
+  );
+  const activities = (catalog.data ?? []).map(catalogActivity);
+  const people: (Person & { id: string })[] = (peopleQuery.data ?? []).map(
+    (person) => ({
+      ...person,
+      initials: person.name
+        .split(" ")
+        .map((part) => part[0])
+        .join("")
+        .slice(0, 2),
+      color: "bg-[#c5d6c1]",
+      status: "Open to agent planning",
+      interests: [],
+      overlap: "Same planning circle",
+    }),
+  );
+  const pending = create.isPending || start.isPending;
+  const notifications = (quests.data ?? []).flatMap((row) =>
+    row.negotiation?.status === "AWAITING_APPROVAL"
+      ? [
+          {
+            id: row.negotiation.id,
+            title: row.proposal?.activitySnapshot.title ?? row.sidequest.intent,
+            status: row.negotiation.status,
+          },
+        ]
+      : [],
+  );
+  const confirmed = (quests.data ?? []).flatMap((row) => {
+    if (row.negotiation?.status !== "CONFIRMED" || !row.proposal) return [];
+    const p = row.proposal;
+    return [
+      {
+        id: row.negotiation.id,
+        title: p.activitySnapshot.title,
+        image: activityImage("Games"),
+        match: 0,
+        people: p.plan.participantIds
+          .filter((id) => id !== userId)
+          .map(() => "Participant"),
+        date: new Date(p.plan.start).toLocaleDateString(),
+        time: `${new Date(p.plan.start).toLocaleTimeString()} – ${new Date(p.plan.end).toLocaleTimeString()}`,
+        location: p.activitySnapshot.location,
+        price: `₩${p.activitySnapshot.cost.toLocaleString()}`,
+        category: "Confirmed plan",
+        description: "All required humans approved this proposal.",
+        reason: "",
+      },
+    ];
+  });
+  function navigate(view: View) {
+    setActiveView(view);
+    setSelected(null);
     setShowNotifications(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
+  function run(id: string) {
+    setError("");
+    resume.mutate({ id });
+  }
+  async function coordinate(intent: string, candidateIds?: string[]) {
+    if (pending || !intent.trim()) return;
+    setError("");
+    const signature = JSON.stringify({ intent, candidateIds });
+    if (retry.current?.signature !== signature)
+      retry.current = { signature, requestId: crypto.randomUUID() };
+    try {
+      const quest = await create.mutateAsync({
+        intent,
+        requestId: retry.current.requestId,
+        constraints: {},
+      });
+      const n = await start.mutateAsync({
+        sidequestId: quest.id,
+        candidateIds,
+      });
+      retry.current = null;
+      setSelected(null);
+      setRequest("");
+      setSelectedNegotiation(n.id);
+      setActiveView("Plans");
+      await utils.sidequest.invalidate();
+      run(n.id);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Could not start planning.",
+      );
+    }
+  }
+  const queryError = catalog.error ?? peopleQuery.error ?? quests.error;
   return (
     <div className="min-h-screen bg-[#f5f6f1] text-[#17211b]">
-      <Sidebar active={activeView} onNavigate={navigate} onSettings={() => setShowSettings(true)} />
+      <Sidebar
+        active={activeView}
+        onNavigate={navigate}
+        onSettings={() => setShowSettings(true)}
+      />
       <main className="min-h-screen pb-24 lg:ml-[232px] lg:pb-0">
         <Header
           userName={userName}
-          onNotifications={() => setShowNotifications((e) => !e)}
+          onNotifications={() => setShowNotifications(!showNotifications)}
           showNotifications={showNotifications}
-          hikingFound={hikingFound}
-          hikingRescheduled={hikingRescheduled}
-          onHikingClick={() => {
-            setSelectedActivity(currentHike);
+          onSettings={() => setShowSettings(true)}
+          notifications={notifications}
+          onNotification={(id) => {
+            setSelectedNegotiation(id);
             setShowNotifications(false);
           }}
         />
-        {"Home" === activeView && (
+        {(error || queryError) && (
+          <div
+            role="alert"
+            className="mx-5 mt-5 rounded-xl bg-red-50 p-4 text-sm text-red-800"
+          >
+            {error || queryError?.message}
+            <button
+              onClick={() => {
+                setError("");
+                void Promise.all([
+                  catalog.refetch(),
+                  peopleQuery.refetch(),
+                  quests.refetch(),
+                ]);
+              }}
+              className="ml-3 underline"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        {(catalog.isLoading || quests.isLoading) && (
+          <p role="status" className="px-9 pt-5 text-sm text-[#627067]">
+            Loading your SideQuest workspace…
+          </p>
+        )}
+        {activeView === "Home" && (
           <HomeView
             userName={userName}
             request={request}
             setRequest={setRequest}
-            onSubmit={function () {
-              if (request.trim()) {
-                setSearchTerm(request.trim());
-                setRequest("");
-                navigate("Discover");
-              }
-            }}
+            onSubmit={() => void coordinate(request)}
             onNavigate={navigate}
-            onSelect={setSelectedActivity}
-            plans={plans}
+            onSelect={setSelected}
+            plans={confirmed}
+            activities={activities}
+            people={people}
+            busy={pending}
           />
         )}
-        {"Scout" === activeView && (
-          <ScoutView
-            userName={userName}
-            onNavigate={navigate}
-            onActivityFound={() => {
-              if (!hikingFound) {
-                setHikingFound(true);
-                setToast("Activity found: Saturday morning hike. Open notifications to review it.");
-              }
-            }}
-            memories={memories}
-            onMemoriesChange={setMemories}
-          />
+        {activeView === "Scout" && (
+          <ScoutView userName={userName} onNavigate={navigate} />
         )}
-        {"Discover" === activeView && (
+        {activeView === "Discover" && (
           <DiscoverView
             searchTerm={searchTerm}
             setSearchTerm={setSearchTerm}
             category={category}
             setCategory={setCategory}
-            activities={filteredActivities}
-            plannedIds={plannedIds}
-            onSelect={setSelectedActivity}
+            activities={activities.filter(
+              (activity) =>
+                (category === "All" || category === activity.category) &&
+                `${activity.title} ${activity.category} ${activity.description}`
+                  .toLowerCase()
+                  .includes(searchTerm.toLowerCase()),
+            )}
+            plannedIds={[]}
+            onSelect={setSelected}
           />
         )}
-        {"Plans" === activeView && (
+        {activeView === "Plans" && (
           <PlansView
-            plans={plans}
-            onSelect={setSelectedActivity}
+            plans={confirmed}
+            negotiations={(quests.data ?? []).flatMap((row) =>
+              row.negotiation && row.negotiation.status !== "CONFIRMED"
+                ? [
+                    {
+                      id: row.negotiation.id,
+                      title:
+                        row.proposal?.activitySnapshot.title ??
+                        row.sidequest.intent,
+                      status: row.negotiation.status,
+                    },
+                  ]
+                : [],
+            )}
+            onNegotiation={setSelectedNegotiation}
+            onSelect={(activity) => setSelectedNegotiation(activity.id)}
             onDiscover={() => navigate("Discover")}
           />
         )}
-        {"People" === activeView && (
+        {activeView === "People" && (
           <PeopleView
-            invited={invitedPeople}
-            onInvite={(e) => {
-              setInvitedPeople((t) => (t.includes(e) ? t : [...t, e]));
-              setToast(`Scout sent ${e} a low-pressure invite.`);
+            people={people}
+            busy={pending}
+            invited={[]}
+            onInvite={(id) => {
+              const person = people.find((p) => p.id === id);
+              void coordinate(
+                `Find a relaxed activity with ${person?.name ?? "this person"} that fits our preferences and availability.`,
+                [id],
+              );
             }}
           />
         )}
       </main>
       <MobileNav active={activeView} onNavigate={navigate} />
-      {selectedActivity && (
+      {selected && (
         <ActivityDetails
-          activity={selectedActivity}
-          isPlanned={plannedIds.includes(selectedActivity.id)}
-          onClose={() => setSelectedActivity(null)}
-          onAdd={() => {
-            if (!plannedIds.includes(selectedActivity.id)) {
-              setPlannedIds((e) => [...e, selectedActivity.id]);
-            }
-            setToast(`${selectedActivity.title} was added to your plans.`);
-            setSelectedActivity(null);
-          }}
-          onRemove={() => {
-            setPlannedIds((e) => e.filter((e) => e !== selectedActivity.id));
-            setToast(`${selectedActivity.title} was removed from your plans.`);
-            setSelectedActivity(null);
-          }}
-          onChanged={(e) => {
-            setToast(e);
-            setSelectedActivity(null);
-          }}
-          onHikingReschedule={() => {
-            setToast(
-              "Agents will negotiate to see if everyone can meet at 9:30 AM. You’ll be notified if the new time works for everyone.",
-            );
-            setHikingRescheduled(true);
-            setSelectedActivity(null);
+          activity={selected}
+          busy={pending}
+          onClose={() => setSelected(null)}
+          onCoordinate={() =>
+            void coordinate(
+              `Explore ${selected.title} or a compatible alternative with people in my circle.`,
+            )
+          }
+        />
+      )}
+      {selectedNegotiation && (
+        <NegotiationPanel
+          key={selectedNegotiation}
+          id={selectedNegotiation}
+          userId={userId}
+          onClose={() => setSelectedNegotiation(null)}
+          onRun={run}
+          running={
+            resume.isPending && resume.variables?.id === selectedNegotiation
+          }
+        />
+      )}
+      {showSettings && (
+        <SettingsDialog
+          onClose={() => {
+            setShowSettings(false);
+            void Promise.all([
+              utils.profile.invalidate(),
+              utils.people.invalidate(),
+            ]);
           }}
         />
       )}
-      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
-      {toast && <Toast message={toast} onClose={() => setToast("")} />}
     </div>
   );
 }

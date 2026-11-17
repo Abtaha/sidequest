@@ -4,17 +4,36 @@ import type { PlansProps } from "./types";
 import { Button } from "@/components/ui/button";
 import { Icon } from "./icons";
 import { PageHeading, EmptyState } from "./shared";
-export function PlansView({ plans, onSelect, onDiscover }: PlansProps) {
+export function PlansView({
+  plans,
+  negotiations,
+  onNegotiation,
+  onSelect,
+  onDiscover,
+}: PlansProps) {
   return (
     <div className="mx-auto max-w-[1100px] px-5 py-8 md:px-9 md:py-10">
       <PageHeading
         eyebrow="Your plans"
         title="Good things on the calendar"
-        copy="Open any plan to see the full context, adjust the details, message the group, or step out."
+        copy="Review proposals, follow your Scouts’ conversations and request changes. Plans are confirmed only after every human approves."
       />
       <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_290px]">
         <div className="space-y-4">
-          {plans.map((e, a) => (
+          {negotiations.map((item) => (
+            <Button
+              design
+              key={item.id}
+              onClick={() => onNegotiation(item.id)}
+              className="flex w-full items-center justify-between gap-4 rounded-2xl border bg-white p-5 text-left"
+            >
+              <span className="font-semibold">{item.title}</span>
+              <span className="text-xs text-[#627067] capitalize">
+                {item.status.toLowerCase().replaceAll("_", " ")}
+              </span>
+            </Button>
+          ))}
+          {plans.map((e) => (
             <Button
               design
               key={e.id}
@@ -22,19 +41,21 @@ export function PlansView({ plans, onSelect, onDiscover }: PlansProps) {
               className="group flex w-full flex-col overflow-hidden rounded-[24px] border border-[#dfe2da] bg-white text-left transition hover:-translate-y-0.5 hover:shadow-xl hover:shadow-[#27372d]/10 sm:flex-row"
               type="button"
             >
-              <img src={e.image} alt="" className="h-44 w-full object-cover sm:h-auto sm:w-52" />
+              <img
+                src={e.image}
+                alt=""
+                className="h-44 w-full object-cover sm:h-auto sm:w-52"
+              />
               <div className="flex flex-1 items-center justify-between gap-4 p-5">
                 <div>
                   <div className="mb-3 flex items-center gap-2">
                     <span className="rounded-full bg-[#dff4c7] px-2.5 py-1 text-[11px] font-bold text-[#315c3e]">
-                      {0 === a ? "Confirmed" : "Details ready"}
-                    </span>
-                    <span className="text-xs text-[#7b867e]">
-                      {e.match}
-                      {"% fit"}
+                      {"Confirmed by everyone"}
                     </span>
                   </div>
-                  <h2 className="text-xl font-semibold tracking-[-0.03em]">{e.title}</h2>
+                  <h2 className="text-xl font-semibold tracking-[-0.03em]">
+                    {e.title}
+                  </h2>
                   <p className="mt-2 text-sm text-[#667169]">
                     {e.date}
                     {" · "}
@@ -65,7 +86,7 @@ export function PlansView({ plans, onSelect, onDiscover }: PlansProps) {
               </div>
             </Button>
           ))}
-          {!plans.length && (
+          {!plans.length && !negotiations.length && (
             <EmptyState
               title="Your calendar is wide open"
               copy="When you accept a SideQuest, it will appear here with everything you need."
@@ -76,7 +97,9 @@ export function PlansView({ plans, onSelect, onDiscover }: PlansProps) {
         </div>
         <aside className="h-fit rounded-[24px] bg-[#244a36] p-6 text-white">
           <Icon name="spark" className="h-5 w-5 text-[#c9ed93]" />
-          <h3 className="mt-5 text-xl font-semibold">{"Let Scout coordinate"}</h3>
+          <h3 className="mt-5 text-xl font-semibold">
+            {"Let Scout coordinate"}
+          </h3>
           <p className="mt-2 text-sm leading-6 text-white/65">
             {
               "Scout can handle the awkward parts: finding overlap, checking budgets, and suggesting a fair meeting point."

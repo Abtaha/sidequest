@@ -1,17 +1,36 @@
 "use client";
+import { formText } from "@/lib/sidequest-data";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 
+import { api } from "@/trpc/react";
 import { Textarea } from "@/components/ui/textarea";
 export default function PersonalizeForm() {
   const router = useRouter();
+  const save = api.scout.sendMessage.useMutation();
+  const [error, setError] = React.useState("");
+  const requestId = React.useRef(crypto.randomUUID());
   return (
     <form
       className="mx-auto w-full max-w-2xl"
-      onSubmit={(t) => {
-        t.preventDefault();
-        router.push("/app");
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setError("");
+        const content = formText(
+          new FormData(event.currentTarget),
+          "personalContext",
+        ).trim();
+        try {
+          if (content)
+            await save.mutateAsync({ requestId: requestId.current, content });
+          router.push("/app");
+          router.refresh();
+        } catch (error) {
+          setError(
+            error instanceof Error ? error.message : "Could not save context.",
+          );
+        }
       }}
     >
       <div className="mb-9 flex items-center justify-between">
@@ -21,12 +40,14 @@ export default function PersonalizeForm() {
           </div>
           <b className="tracking-[-0.03em]">{"SideQuest"}</b>
         </div>
-        <span className="text-xs font-semibold text-[#758078]">{"Step 3 of 3"}</span>
+        <span className="text-xs font-semibold text-[#758078]">
+          {"Step 3 of 3"}
+        </span>
       </div>
       <div className="mb-10 h-1.5 overflow-hidden rounded-full bg-[#e1e6dd]">
         <div className="h-full w-full rounded-full bg-[#76a85d]" />
       </div>
-      <p className="text-xs font-bold uppercase tracking-[0.15em] text-[#6b866f]">
+      <p className="text-xs font-bold tracking-[0.15em] text-[#6b866f] uppercase">
         {"Make Scout yours"}
       </p>
       <h1 className="mt-3 text-4xl font-semibold tracking-[-0.045em] text-[#17211b] sm:text-5xl">
@@ -58,6 +79,11 @@ export default function PersonalizeForm() {
           }
         </div>
       </div>
+      {error && (
+        <p role="alert" className="mt-4 text-sm text-red-700">
+          {error}
+        </p>
+      )}
       <div className="mt-10 flex items-center justify-between">
         <Button
           design
@@ -70,6 +96,7 @@ export default function PersonalizeForm() {
         <Button
           design
           type="submit"
+          disabled={save.isPending}
           className="rounded-xl bg-[#c9ed93] px-6 py-3 text-sm font-bold text-[#244a36]"
         >
           {"Meet my Scout"}

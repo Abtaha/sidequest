@@ -1,0 +1,1 @@
+ALTER TABLE "sq_proposals" ADD COLUMN "activitySnapshot" jsonb NOT NULL;

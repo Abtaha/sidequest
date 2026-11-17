@@ -1,11 +1,11 @@
 "use client";
 import * as React from "react";
 import type { PeopleProps } from "./types";
-import { people } from "./data";
+
 import { Button } from "@/components/ui/button";
 import { Icon } from "./icons";
 import { PageHeading, PersonAvatar } from "./shared";
-export function PeopleView({ invited, onInvite }: PeopleProps) {
+export function PeopleView({ invited, onInvite, people, busy }: PeopleProps) {
   const [filter, setFilter] = React.useState("Free now");
   return (
     <div className="mx-auto max-w-[1100px] px-5 py-8 md:px-9 md:py-10">
@@ -15,7 +15,7 @@ export function PeopleView({ invited, onInvite }: PeopleProps) {
         copy="Availability is shared at a high level. Scout never reveals private calendar details or personal notes."
       />
       <div className="mt-7 flex flex-wrap gap-2">
-        {["Free now", "This weekend", "Most compatible"].map((e) => (
+        {["Open to planning"].map((e) => (
           <Button
             design
             key={e}
@@ -28,17 +28,28 @@ export function PeopleView({ invited, onInvite }: PeopleProps) {
         ))}
       </div>
       <div className="mt-6 grid gap-4 md:grid-cols-2">
+        {!people.length && (
+          <p className="text-sm text-[#627067]">
+            No permitted people are discoverable yet. Check your discovery and
+            sharing settings; both people must opt in.
+          </p>
+        )}
         {people.map((s) => (
-          <article key={s.name} className="rounded-[22px] border border-[#dfe2da] bg-white p-5">
+          <article
+            key={s.name}
+            className="rounded-[22px] border border-[#dfe2da] bg-white p-5"
+          >
             <div className="flex items-start gap-4">
               <PersonAvatar person={s} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h2 className="font-semibold">{s.name}</h2>
-                    <p className="mt-0.5 text-xs font-medium text-[#5d7a61]">{s.status}</p>
+                    <p className="mt-0.5 text-xs font-medium text-[#5d7a61]">
+                      {s.status}
+                    </p>
                   </div>
-                  <span className="whitespace-nowrap rounded-full bg-[#eef2e8] px-2.5 py-1 text-[11px] font-semibold text-[#627067]">
+                  <span className="rounded-full bg-[#eef2e8] px-2.5 py-1 text-[11px] font-semibold whitespace-nowrap text-[#627067]">
                     {s.overlap}
                   </span>
                 </div>
@@ -57,20 +68,16 @@ export function PeopleView({ invited, onInvite }: PeopleProps) {
             <div className="mt-5 grid grid-cols-2 gap-2">
               <Button
                 design
-                className="flex items-center justify-center gap-2 rounded-xl border border-[#d8ddd5] px-3 py-2.5 text-xs font-semibold text-[#244a36]"
+                onClick={() => onInvite(s.id)}
+                disabled={busy}
+                className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-semibold ${invited.includes(s.id) ? "bg-[#dff4c7] text-[#244a36]" : "bg-[#244a36] text-white"}`}
                 type="button"
               >
-                <Icon name="message" className="h-4 w-4" />
-                {"Message"}
-              </Button>
-              <Button
-                design
-                onClick={() => onInvite(s.name)}
-                className={`flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-semibold ${invited.includes(s.name) ? "bg-[#dff4c7] text-[#244a36]" : "bg-[#244a36] text-white"}`}
-                type="button"
-              >
-                <Icon name={invited.includes(s.name) ? "check" : "spark"} className="h-4 w-4" />
-                {invited.includes(s.name) ? "Invite sent" : "Ask Scout"}
+                <Icon
+                  name={invited.includes(s.id) ? "check" : "spark"}
+                  className="h-4 w-4"
+                />
+                {invited.includes(s.id) ? "Negotiation started" : "Ask Scout"}
               </Button>
             </div>
           </article>

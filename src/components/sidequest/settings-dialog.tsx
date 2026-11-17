@@ -1,12 +1,14 @@
 "use client";
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
+import { api, type RouterOutputs } from "@/trpc/react";
+import { authClient } from "@/server/better-auth/client";
+import { localDateValue } from "@/lib/sidequest-data";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { Icon } from "./icons";
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
-  const [testMatches, setTestMatches] = React.useState(true);
-  const [planUpdates, setPlanUpdates] = React.useState(true);
-  const [availabilitySharing, setAvailabilitySharing] = React.useState(true);
+  const profile = api.profile.get.useQuery();
   return (
     <Dialog
       open
@@ -16,82 +18,238 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     >
       <DialogContent
         design
-        showCloseButton={false}
-        className="top-1/2 left-1/2 w-[calc(100%-2.5rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-[24px] bg-white p-6 shadow-2xl"
+        className="top-1/2 left-1/2 max-h-[90vh] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[24px] bg-white p-6"
       >
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#6b866f]">
-              {"Preferences"}
-            </p>
-            <DialogTitle className="mt-1 text-2xl font-semibold leading-8">
-              {"Scout settings"}
-            </DialogTitle>
-          </div>
-          <Button design onClick={onClose} aria-label="Close settings" type="button">
-            <Icon name="close" />
-          </Button>
-        </div>
-        <div className="mt-6 space-y-3">
-          <PreferenceToggle
-            title="Let Scout test matches"
-            copy="Scout can privately compare compatibility."
-            enabled={testMatches}
-            onClick={() => setTestMatches((e) => !e)}
-          />
-          <PreferenceToggle
-            title="Plan updates"
-            copy="Notify me when details change."
-            enabled={planUpdates}
-            onClick={() => setPlanUpdates((value) => !value)}
-          />
-          <PreferenceToggle
-            title="Availability sharing"
-            copy="Only show broad free-time windows."
-            enabled={availabilitySharing}
-            onClick={() => setAvailabilitySharing((value) => !value)}
-          />
-        </div>
-        <Button
-          design
-          onClick={onClose}
-          className="mt-6 w-full rounded-xl bg-[#244a36] px-4 py-3 text-sm font-bold text-white"
-          type="button"
-        >
-          {"Save preferences"}
-        </Button>
+        <DialogTitle className="text-2xl font-semibold">
+          Scout settings
+        </DialogTitle>
+        {profile.isLoading && <p role="status">Loading profile…</p>}
+        {profile.error && (
+          <p role="alert" className="text-sm text-red-700">
+            {profile.error.message}
+          </p>
+        )}
+        {profile.data?.profile && (
+          <SettingsForm data={profile.data} onClose={onClose} />
+        )}
       </DialogContent>
     </Dialog>
   );
 }
-export function PreferenceToggle({
-  title,
-  copy,
-  enabled,
-  onClick,
+function SettingsForm({
+  data,
+  onClose,
 }: {
-  title: string;
-  copy: string;
-  enabled: boolean;
-  onClick: () => void;
+  data: RouterOutputs["profile"]["get"];
+  onClose: () => void;
 }) {
+  const queryClient = useQueryClient();
+  const profile = data.profile!,
+    router = useRouter(),
+    utils = api.useUtils();
+  const [discoverable, setDiscoverable] = React.useState(profile.discoverable),
+    [sharing, setSharing] = React.useState(profile.sharing),
+    [circle, setCircle] = React.useState(profile.circle),
+    [maxCost, setMaxCost] = React.useState(
+      profile.constraints.maxCost?.toString() ?? "",
+    ),
+    [windows, setWindows] = React.useState(
+      data.availability.map((w) => ({
+        start: localDateValue(w.start),
+        end: localDateValue(w.end),
+      })),
+    ),
+    [error, setError] = React.useState("");
+  const saveProfile = api.profile.update.useMutation(),
+    saveAvailability = api.profile.updateAvailability.useMutation();
+  const busy = saveProfile.isPending || saveAvailability.isPending;
   return (
-    <div className="flex items-center justify-between gap-4 rounded-2xl bg-[#f4f5f1] p-4">
-      <div>
-        <p className="text-sm font-semibold">{title}</p>
-        <p className="mt-1 text-xs text-[#737d76]">{copy}</p>
-      </div>
+    <form
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setError("");
+        const parsed = windows.map((w) => ({
+          start: new Date(w.start),
+          end: new Date(w.end),
+        }));
+        if (
+          parsed.some(
+            (w) =>
+              !Number.isFinite(+w.start) ||
+              !Number.isFinite(+w.end) ||
+              w.end <= w.start,
+          )
+        ) {
+          setError(
+            "Each availability window needs a valid start and a later end.",
+          );
+          return;
+        }
+        try {
+          await saveProfile.mutateAsync({
+            discoverable,
+            sharing,
+            circle,
+            blockedUsers: profile.blockedUsers,
+            constraints: {
+              ...profile.constraints,
+              maxCost: maxCost === "" ? undefined : Number(maxCost),
+            },
+          });
+          await saveAvailability.mutateAsync({ windows: parsed });
+          await Promise.all([
+            utils.profile.invalidate(),
+            utils.people.invalidate(),
+          ]);
+          onClose();
+        } catch (error) {
+          setError(
+            error instanceof Error
+              ? error.message
+              : "Could not save preferences.",
+          );
+        }
+      }}
+      className="space-y-4"
+    >
+      <label className="flex gap-3 rounded-xl bg-[#f4f5f1] p-4 text-sm">
+        <input
+          type="checkbox"
+          checked={discoverable}
+          onChange={(event) => setDiscoverable(event.target.checked)}
+        />{" "}
+        Let people in my circle discover my Scout
+      </label>
+      <label className="flex gap-3 rounded-xl bg-[#f4f5f1] p-4 text-sm">
+        <input
+          type="checkbox"
+          checked={sharing}
+          onChange={(event) => setSharing(event.target.checked)}
+        />{" "}
+        Allow Scouts to share necessary planning constraints. Private notes stay
+        private.
+      </label>
+      <label className="block text-sm">
+        Planning circle
+        <input
+          required
+          maxLength={80}
+          value={circle}
+          onChange={(event) => setCircle(event.target.value)}
+          className="mt-2 w-full rounded-xl border p-3"
+        />
+      </label>
+      <label className="block text-sm">
+        Hard budget ceiling per person (₩)
+        <input
+          type="number"
+          min={0}
+          step={1}
+          value={maxCost}
+          onChange={(event) => setMaxCost(event.target.value)}
+          placeholder="No explicit ceiling"
+          className="mt-2 w-full rounded-xl border p-3"
+        />
+      </label>
+      <fieldset>
+        <legend className="text-sm font-semibold">
+          Exact availability (your local timezone)
+        </legend>
+        <p className="mt-2 text-xs text-[#627067]">
+          Only these dated windows may be proposed. An empty calendar prevents
+          new proposals.
+        </p>
+        <div className="mt-3 space-y-3">
+          {windows.map((window, index) => (
+            <div key={index} className="rounded-xl border p-3">
+              <label className="block text-xs">
+                Start
+                <input
+                  required
+                  type="datetime-local"
+                  value={window.start}
+                  onChange={(event) =>
+                    setWindows(
+                      windows.map((w, i) =>
+                        i === index ? { ...w, start: event.target.value } : w,
+                      ),
+                    )
+                  }
+                  className="mt-1 w-full rounded border p-2"
+                />
+              </label>
+              <label className="mt-2 block text-xs">
+                End
+                <input
+                  required
+                  type="datetime-local"
+                  value={window.end}
+                  onChange={(event) =>
+                    setWindows(
+                      windows.map((w, i) =>
+                        i === index ? { ...w, end: event.target.value } : w,
+                      ),
+                    )
+                  }
+                  className="mt-1 w-full rounded border p-2"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  setWindows(windows.filter((_, i) => i !== index))
+                }
+                className="mt-2 text-xs text-red-700"
+              >
+                Remove window
+              </button>
+            </div>
+          ))}
+        </div>
+        <Button
+          design
+          disabled={windows.length >= 30}
+          type="button"
+          onClick={() => setWindows([...windows, { start: "", end: "" }])}
+          className="mt-3 rounded-xl border px-4 py-2 text-xs"
+        >
+          Add availability window
+        </Button>
+      </fieldset>
+      {error && (
+        <p role="alert" className="text-sm text-red-700">
+          {error}
+        </p>
+      )}
       <Button
         design
-        onClick={onClick}
-        className={`flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition ${enabled ? "justify-end bg-[#76a85d]" : "justify-start bg-[#cbd1ca]"}`}
-        aria-label={`Toggle ${title}`}
-        role="switch"
-        aria-checked={enabled}
-        type="button"
+        disabled={busy}
+        type="submit"
+        className="w-full rounded-xl bg-[#244a36] p-3 text-sm font-semibold text-white"
       >
-        <span className="h-5 w-5 rounded-full bg-white shadow-sm" />
+        {busy ? "Saving…" : "Save preferences"}
       </Button>
-    </div>
+      <Button
+        design
+        type="button"
+        onClick={async () => {
+          try {
+            const result = await authClient.signOut();
+            if (result.error) {
+              setError(result.error.message ?? "Could not sign out");
+              return;
+            }
+            queryClient.clear();
+            router.replace("/login");
+            router.refresh();
+          } catch {
+            setError("Could not sign out.");
+          }
+        }}
+        className="w-full text-sm text-[#627067]"
+      >
+        Sign out
+      </Button>
+    </form>
   );
 }

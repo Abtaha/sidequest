@@ -47,3 +47,7 @@ yarn-error.log*
 
 # Local design inspection and verification artifacts
 /.reference/
+
+/.playwright-mcp/
+/playwright-report/
+/test-results/
