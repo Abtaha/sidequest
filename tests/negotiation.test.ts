@@ -549,3 +549,21 @@ it("enforces user exclusions before any inter-agent contact, including discovery
     await f.db.delete(s.userMemories).where(eq(s.userMemories.id, m!.id));
   }
 });
+
+it("discovers a feasible pair when the larger eligible group cannot meet", async () => {
+  const incompatible = syntheticIds[7]!;
+  const quest = await service.create(a, {
+    requestId: randomUUID(),
+    intent: "Find an upcoming shared activity.",
+    constraints: {
+      excludedUsers: syntheticIds.filter(
+        (id) => ![a, b, incompatible].includes(id),
+      ),
+    },
+  });
+
+  const negotiation = await service.start(a, quest.id);
+  const { conversation } = await service.load(negotiation.id);
+
+  expect(conversation.participants).toEqual([a, b]);
+});

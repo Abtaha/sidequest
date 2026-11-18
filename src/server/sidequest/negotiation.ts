@@ -219,6 +219,25 @@ export class NegotiationService {
             /* Respect bilateral discovery restrictions. */
           }
         }
+        if (ids.length > 1) {
+          const eventAgent = new EventAgent(tx, this.model);
+          const group = await this.participants(ids, {}, tx);
+          if (!(await eventAgent.options(group, quest.constraints)).length) {
+            // A permitted group can still have no common time or activity.
+            // Validate fallback pairs with the same hard constraints as proposals.
+            for (const candidate of candidates) {
+              if (candidate.userId === userId) continue;
+              const pair = [userId, candidate.userId];
+              const members = await this.participants(pair, {}, tx);
+              if (
+                (await eventAgent.options(members, quest.constraints)).length
+              ) {
+                ids = pair;
+                break;
+              }
+            }
+          }
+        }
       }
       ids = [...new Set(ids)];
       checkContacts(
