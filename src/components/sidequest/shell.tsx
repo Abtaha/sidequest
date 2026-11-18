@@ -112,36 +112,10 @@ export function Header({
         {showNotifications && (
           <div className="absolute right-0 top-12 z-50 w-[min(28rem,calc(100vw-2rem))] rounded-[22px] border border-[#dfe2da] bg-white p-4 shadow-2xl shadow-black/10">
             <h2 className="px-1 pb-4 text-sm font-bold uppercase tracking-[0.12em] text-[#7f8b82]">
-              Notifications
+              While you were away
             </h2>
-            <div className="border-t border-[#e5e8e2] pt-4">
-              <p className="px-1 pb-3 text-xs font-bold uppercase tracking-[0.14em] text-[#8a938d]">
-                While you were away
-              </p>
-              <div className="space-y-1">
-                <div className="rounded-xl px-3 py-3">
-                  <p className="text-base font-semibold text-[#202a24]">
-                    Maya is free Saturday
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-[#737d76]">
-                    Your overlap just opened a 3-hour window.
-                  </p>
-                </div>
-                <div className="rounded-xl px-3 py-3">
-                  <p className="text-base font-semibold text-[#202a24]">
-                    Coffee with Elena
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-[#737d76]">
-                    Scout found a time that works for both of you.
-                  </p>
-                </div>
-              </div>
-            </div>
             {notifications.length > 0 && (
-              <div className="mt-3 border-t border-[#e5e8e2] pt-4">
-                <p className="px-1 pb-2 text-xs font-bold uppercase tracking-[0.14em] text-[#8a938d]">
-                  Ready for your review
-                </p>
+              <div className="border-t border-[#e5e8e2] pt-4">
                 <div className="space-y-1">
                   {notifications.map((item) => (
                     <Button
