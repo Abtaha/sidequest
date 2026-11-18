@@ -110,25 +110,31 @@ export function Header({
           {userName.slice(0, 1).toUpperCase()}
         </Button>
         {showNotifications && (
-          <div className="absolute top-12 right-0 w-80 rounded-2xl border bg-white p-4 shadow-xl">
-            <h2 className="text-sm font-semibold">Plan updates</h2>
-            {notifications.map((item) => (
-              <Button
-                design
-                key={item.id}
-                onClick={() => onNotification(item.id)}
-                className="mt-3 w-full rounded-xl bg-[#eef2e8] p-3 text-left text-sm"
-              >
-                <p className="font-semibold">{item.title}</p>
-                <p className="mt-1 capitalize">
-                  {item.status.toLowerCase().replaceAll("_", " ")}
-                </p>
-              </Button>
-            ))}
-            {!notifications.length && (
-              <p className="mt-3 text-sm text-[#627067]">
-                No proposals awaiting your review.
-              </p>
+          <div className="absolute right-0 top-12 z-50 w-[min(28rem,calc(100vw-2rem))] rounded-[22px] border border-[#dfe2da] bg-white p-4 shadow-2xl shadow-black/10">
+            <h2 className="px-1 pb-4 text-sm font-bold uppercase tracking-[0.12em] text-[#7f8b82]">
+              While you were away
+            </h2>
+            {notifications.length > 0 && (
+              <div className="border-t border-[#e5e8e2] pt-4">
+                <div className="space-y-1">
+                  {notifications.map((item) => (
+                    <Button
+                      design
+                      key={item.id}
+                      onClick={() => onNotification(item.id)}
+                      className="w-full rounded-xl px-3 py-3 text-left transition hover:bg-[#f0f2ec]"
+                      type="button"
+                    >
+                      <p className="text-sm font-semibold text-[#202a24]">
+                        {item.title}
+                      </p>
+                      <p className="mt-1 text-sm leading-5 text-[#737d76]">
+                        {item.status.toLowerCase().replaceAll("_", " ")}
+                      </p>
+                    </Button>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         )}
