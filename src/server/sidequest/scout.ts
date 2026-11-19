@@ -15,6 +15,7 @@ import { type Model } from "./model";
 import { type MemoryService } from "./memory";
 import { type NegotiationService } from "./negotiation";
 import { DomainError, relativeTimeChange } from "./types";
+import { currentPlansForChat } from "./plan-context";
 export class ScoutService {
   constructor(
     private db: Database,
@@ -154,33 +155,39 @@ export class ScoutService {
           conversationId: source.conversationId,
           limit: 6,
         });
-        const history = await this.db
-          .select({ role: scoutMessages.role, content: scoutMessages.content })
-          .from(scoutMessages)
-          .where(
-            and(
-              eq(scoutMessages.conversationId, source.conversationId),
-              eq(scoutMessages.userId, userId),
-              notExists(
-                this.db
-                  .select({ id: userMemories.id })
-                  .from(userMemories)
-                  .where(
-                    and(
-                      eq(
-                        userMemories.conversationId,
-                        scoutMessages.conversationId,
+        const [currentPlans, history] = await Promise.all([
+          currentPlansForChat(this.db, userId),
+          this.db
+            .select({
+              role: scoutMessages.role,
+              content: scoutMessages.content,
+            })
+            .from(scoutMessages)
+            .where(
+              and(
+                eq(scoutMessages.conversationId, source.conversationId),
+                eq(scoutMessages.userId, userId),
+                notExists(
+                  this.db
+                    .select({ id: userMemories.id })
+                    .from(userMemories)
+                    .where(
+                      and(
+                        eq(
+                          userMemories.conversationId,
+                          scoutMessages.conversationId,
+                        ),
+                        eq(userMemories.status, "DELETED"),
                       ),
-                      eq(userMemories.status, "DELETED"),
                     ),
-                  ),
+                ),
               ),
-            ),
-          )
-          .orderBy(desc(scoutMessages.createdAt))
-          .limit(10);
+            )
+            .orderBy(desc(scoutMessages.createdAt))
+            .limit(10),
+        ]);
         return this.model.generate(
-          "Reply conversationally as the user's personal Scout. Use relevant retrieved memories, including corrections and confidence. Inspect only the latest message for a direct planning request. For a change to an existing group plan, such as 'let’s go to a movie instead', set revisionInstruction to a concise summary of the requested change and omit planningIntent. For a new activity search or coordination request, set planningIntent to a concise standalone summary with preferences, dates and limits and omit revisionInstruction. Vague requests such as 'Find me something fun this weekend' count. For casual chat, memory updates, hypothetical or quoted requests, omit both fields. Omit private or unrelated details. Do not say agents have been contacted or anything has been confirmed. Remembered soft preferences are not hard constraints.",
+          "Reply conversationally as the user's personal Scout. Use relevant retrieved memories, including corrections and confidence. Use currentPlans as the source of truth about their existing plans. Distinguish confirmed plans, proposals needing the user's approval, proposals awaiting others, and conversations still in progress. Flag scheduling overlaps when relevant and label any UTC times. If total exceeds the number of plan summaries supplied, say the list is partial when asked for all plans. Never invent plans or infer that a pending proposal is confirmed. Asking about existing plans or availability is read-only. A gap between plans does not prove availability. If a proposal needs the user's decision, direct them to the plan card or Plans to approve or pass. Inspect only the latest message for a direct planning request. For a change to an existing group plan, such as 'let’s go to a movie instead', set revisionInstruction to a concise summary of the requested change and omit planningIntent. For a new activity search or coordination request, set planningIntent to a concise standalone summary with preferences, dates and limits and omit revisionInstruction. Vague requests such as 'Find me something fun this weekend' count. For casual chat, memory updates, hypothetical or quoted requests, omit both fields. Omit private or unrelated details from any group-planning intent or revision. Do not claim agents have been contacted or a new plan has been confirmed. Remembered soft preferences are not hard constraints.",
           z.object({
             content: z.string().min(1).max(3000),
             planningIntent: z.string().trim().min(1).max(2000).nullish(),
@@ -188,12 +195,16 @@ export class ScoutService {
           }),
           {
             message: input.content,
+            currentPlans,
             memories: [
               ...new Map(
                 [...relevant, ...fallback].map((m) => [m.id, m]),
               ).values(),
             ].slice(0, 12),
-            messages: history.reverse(),
+            messages: history.reverse().map((entry) => ({
+              ...entry,
+              content: entry.content.slice(0, 600),
+            })),
           },
         );
       };

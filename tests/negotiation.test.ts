@@ -927,3 +927,77 @@ it("shortlists relevant interests before negotiating and skips expired interests
       await f.db.delete(s.userMemories).where(eq(s.userMemories.id, memory.id));
   }
 });
+
+it("grounds Scout chat in the user's own and shared plans without including outsiders' plans", async () => {
+  const original = await agree();
+  for (const person of [a, b, c])
+    await service.approve(person, { ...original, approved: true });
+  const own = await service.load(n.id);
+  const shared = await service.create(b, {
+    intent: "Arrange a shared film outing",
+    requestId: randomUUID(),
+    constraints: {},
+  });
+  await service.start(b, shared.id, [a]);
+  const outsider = syntheticIds[3]!;
+  const unrelated = await service.create(outsider, {
+    intent: "An unrelated climbing workshop",
+    requestId: randomUUID(),
+    constraints: {},
+  });
+  await service.start(outsider, unrelated.id, [c]);
+
+  const scout = new ScoutService(
+    f.db,
+    model,
+    new MemoryService(f.db, model),
+    service,
+  );
+  model.replies.push(
+    { memories: [] },
+    { content: "Here's what you have coming up." },
+  );
+  const result = await scout.send(a, {
+    content: "What plans do I have coming up?",
+    requestId: randomUUID(),
+  });
+  expect(result.planningQuestId).toBeUndefined();
+  expect(result.revisedNegotiationId).toBeUndefined();
+  const context = model.inputs[1]?.data as {
+    currentPlans: { plans: unknown[] };
+  };
+  expect(context.currentPlans.plans).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        status: "CONFIRMED",
+        role: "organizer",
+        start: plan.start,
+        yourDecision: "approved",
+      }),
+      expect.objectContaining({
+        title: shared.intent,
+        status: "DISCOVERING",
+        role: "participant",
+      }),
+    ]),
+  );
+  expect(JSON.stringify(context.currentPlans)).not.toContain(unrelated.intent);
+
+  const next = await service.create(a, {
+    intent: "Find another board game meetup",
+    requestId: randomUUID(),
+    constraints: {},
+  });
+  const other = await service.start(a, next.id, [b]);
+  model.replies.push(action("INQUIRY", b, "Would you be free later that day?"));
+  await service.tick(other.id);
+  const turn = model.inputs[2]?.data as {
+    privateContext: { commitments: unknown[] };
+  };
+  expect(turn.privateContext.commitments).toContainEqual({
+    status: "confirmed",
+    start: plan.start,
+    end: plan.end,
+  });
+  expect((await service.load(own.n.id)).n.status).toBe("CONFIRMED");
+});

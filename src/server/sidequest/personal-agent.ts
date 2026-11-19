@@ -8,6 +8,7 @@ import { type MemoryService } from "./memory";
 import { type Model } from "./model";
 import { type EventAgent } from "./events";
 import { actionSchema, type AgentAction } from "./types";
+import { planningCommitmentsForScout } from "./plan-context";
 export type Turn = {
   userId: string;
   conversationId: string;
@@ -46,9 +47,12 @@ export function createPersonalAgent(
         revisionInstruction,
         interestQuery,
       } = s.input;
-      const relevant = await memory.retrieve(userId, {
-        query: revisionInstruction ?? interestQuery ?? intent,
-      });
+      const [relevant, commitments] = await Promise.all([
+        memory.retrieve(userId, {
+          query: revisionInstruction ?? interestQuery ?? intent,
+        }),
+        planningCommitmentsForScout(db, userId, conversationId),
+      ]);
       // Include a few recent preferences for vague requests with no matching search tokens.
       const recent = await memory.retrieve(userId, { limit: 6 });
       const transcript = await new Mailbox(
@@ -97,6 +101,7 @@ export function createPersonalAgent(
         .limit(3);
       return {
         context: {
+          commitments,
           memories: [
             ...new Map(
               [...relevant, ...recent].map((m) => [
@@ -142,7 +147,7 @@ export function createPersonalAgent(
           ((type !== "PROPOSE" && type !== "COUNTER") || slots.length > 0),
       );
       const action = await model.generate(
-        `You are the independent Scout of user ${s.input.userId}. Represent only this user using their private context. Use the latest explicit preferences and corrections. Share only necessary planning details.
+        `You are the independent Scout of user ${s.input.userId}. Represent only this user using their private context. Use the latest explicit preferences and corrections. Check commitments when choosing or voting on a slot. For an overlap with a confirmed plan, prefer a different time or ask your human if a conflict must be resolved. A tentative proposal may change. Share only availability or the need for a different time with other Scouts. Share only necessary planning details.
 
 ${s.input.proposal ? "Your task this turn is to vote on the active proposal. Accept it if it fits your user's needs. A COUNTER is a different plan, so never select the active time slot as a counter." : "Your task this turn is to help the group find a new plan."}
 
