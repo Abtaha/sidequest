@@ -241,6 +241,11 @@ export default function SideQuestApp({
             userName={userName}
             onNavigate={navigate}
             onStartPlanning={startPlanning}
+            onRevision={(id) => {
+              setSelectedNegotiation(id);
+              void utils.sidequest.invalidate();
+              run(id);
+            }}
           />
         )}
         {activeView === "Discover" && (

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Annotation, StateGraph, START, END } from "@langchain/langgraph";
-import { and, eq, desc, notExists } from "drizzle-orm";
+import { and, eq, ne, desc, notExists } from "drizzle-orm";
 import { agentEpisodes, scoutMessages, userMemories } from "../db/schema";
 import { Mailbox } from "./mailbox";
 import { type Database } from "./storage";
@@ -12,9 +12,13 @@ export type Turn = {
   userId: string;
   conversationId: string;
   intent: string;
+  revisionTurn?: number;
+  previousActivity?: string;
+  revisionInstruction?: string;
+  interestQuery?: string;
   participants: string[];
   incomingFrom?: string;
-  proposal: unknown;
+  proposal: { hash: string } | null;
   constraints: unknown;
   options: ReturnType<EventAgent["optionsFor"]>;
   eventAdvice: unknown;
@@ -32,15 +36,24 @@ export function createPersonalAgent(
   return new StateGraph(State)
     .addNode("receive_message", (s) => ({ input: s.input }))
     .addNode("retrieve_memory", async (s) => {
-      const { userId, conversationId, intent } = s.input;
-      const relevant = await memory.retrieve(userId, { query: intent });
+      const {
+        userId,
+        conversationId,
+        intent,
+        revisionTurn,
+        revisionInstruction,
+        interestQuery,
+      } = s.input;
+      const relevant = await memory.retrieve(userId, {
+        query: revisionInstruction ?? interestQuery ?? intent,
+      });
       // Include a few recent preferences for vague requests with no matching search tokens.
       const recent = await memory.retrieve(userId, { limit: 6 });
       const transcript = await new Mailbox(
         db,
         conversationId,
         s.input.participants,
-      ).context(userId);
+      ).context(userId, revisionTurn);
       const history = await db
         .select({
           role: scoutMessages.role,
@@ -72,7 +85,12 @@ export function createPersonalAgent(
       const episodes = await db
         .select({ kind: agentEpisodes.kind, summary: agentEpisodes.summary })
         .from(agentEpisodes)
-        .where(eq(agentEpisodes.userId, userId))
+        .where(
+          and(
+            eq(agentEpisodes.userId, userId),
+            ne(agentEpisodes.kind, "REVISION_REQUESTED"),
+          ),
+        )
         .orderBy(desc(agentEpisodes.createdAt))
         .limit(3);
       return {
@@ -111,26 +129,28 @@ export function createPersonalAgent(
         throw new Error("No other Scout belongs to this negotiation");
       const replyTo = recipients.find((id) => id === s.input.incomingFrom);
       const { options } = s.input;
-      const [firstActivityId, ...otherActivityIds] = options.map(
-        ({ plan }) => plan.activityId,
-      );
+      const availableActivityIds = options.map(({ plan }) => plan.activityId);
       const [firstType, ...otherTypes] = actionSchema.shape.type.options.filter(
         (type) =>
           (type !== "ACCEPT" || Boolean(s.input.proposal)) &&
+          (type !== "PROPOSE" || !s.input.proposal) &&
           ((type !== "PROPOSE" && type !== "COUNTER") ||
-            Boolean(firstActivityId)),
+            availableActivityIds.length > 0),
       );
       const action = await model.generate(
-        `You are the independent Scout of user ${s.input.userId}. Represent only this user, using their private context. Current retrieved memories, especially explicit user edits, supersede older conflicting conversation history. Other Scouts have different information. Decide your next action: ask a participant a question, suggest an alternative, counteroffer, accept/reject the exact current proposal, consult events, request human clarification or end. First learn constraints through messages when useful. Reply to addressed inquiries; negotiate soft preferences. Do not repeat questions that another Scout has already answered in the transcript. If the current valid proposal fits your user and no clarification is unresolved, accept it instead of asking again. Use the proposal card to communicate exact times and capacity. When assessing group size, count the current participants. Venue capacity describes how many people can attend. A soft preference can be compromised if the option fits the user's hard constraints. Ask other Scouts about their own users. If only your human can answer a question required to proceed, use REQUEST_HUMAN. Any proposal must use a supplied real catalog activity/feasible plan, with all participants. You may suggest compatible alternatives without the user naming them. Only use ACCEPT if the top-level proposal is non-null, and copy its exact hash into proposalHash. An idea or agreement in conversation is insufficient. If proposal is null and you agree on a feasible option, emit PROPOSE with the selected activity ID instead. Do not accept a proposal from past conversations. When there is no current proposal, use proposalHash: null. An agent-level ACCEPT never approves on behalf of a human. No other user is yours to control. For messages, choose recipientId from allowedRecipientIds. When the list has one recipient, routing is automatic. Use null for CONSULT_EVENTS, REQUEST_HUMAN, and END. PROPOSE and COUNTER require plan with only the activityId of one supplied option. The server uses the exact schedule and participants of the selected option. Describe that option as supplied. Never choose PROPOSE or COUNTER just to ask a question; use INQUIRY or REQUEST_INFO. If there are no feasible options, ask for human clarification or end instead. All other actions must use plan: null. Include only necessary, permitted information in content.`,
+        `You are the independent Scout of user ${s.input.userId}. Represent only this user using their private context. Use the latest explicit preferences and corrections. Share only necessary planning details.
+
+${s.input.proposal ? "Your task this turn is to vote on the active proposal. Accept it if it fits your user's needs. A COUNTER is a different plan, so never select the active activity as a counter." : "Your task this turn is to help the group find a new plan."}
+
+A revision keeps the same participants. If revisionInstruction is supplied, it is your user's latest change to this plan. Follow it ahead of older requests. Keep previousActivity if the user only asked about scheduling. If no supplied option fits the requested change, use REQUEST_HUMAN. When reviewing another Scout's revised proposal, evaluate the new activity against your own user's preferences and constraints. If it fits, ACCEPT. Counter only for a concrete unmet need or strong preference of your user, and choose an option that supports the activity change. A soft preference may be compromised.
+
+Use PROPOSE when there is no active proposal and a supplied option fits. Use COUNTER to suggest a different supplied option. For either action, set plan.activityId to one of availableActivityIds. The server uses that option's exact time and participants. For all other actions use plan: null. Refer to the proposal card for exact times and capacity. Group size is the number of participants. Venue capacity is the maximum it can hold.
+
+Use ACCEPT when the top-level proposal fits your user. The server records votes against the version shown to you. Agent acceptance never approves for a human. Ask other Scouts about their own users if you need missing information. Do not repeat a question already answered. Use REQUEST_HUMAN for a decision only your own human can make. Use null for recipientId on CONSULT_EVENTS, REQUEST_HUMAN, and END. For other actions choose an allowedRecipientIds entry. One-to-one routing is automatic.`,
         actionSchema.extend({
           type: z.enum([firstType!, ...otherTypes]),
-          plan: firstActivityId
-            ? z
-                .object({
-                  activityId: z.enum([firstActivityId, ...otherActivityIds]),
-                })
-                .nullish()
-            : z.null().optional(),
+          plan: z.object({ activityId: z.string() }).nullish(),
+          proposalHash: actionSchema.shape.proposalHash.optional(),
           recipientId: otherRecipients.length
             ? z.enum([onlyRecipient, ...otherRecipients]).nullish()
             : actionSchema.shape.recipientId.optional(),
@@ -138,6 +158,7 @@ export function createPersonalAgent(
         {
           ...s.input,
           allowedRecipientIds: recipients,
+          availableActivityIds,
           privateContext: s.context,
         },
       );
@@ -158,6 +179,10 @@ export function createPersonalAgent(
         action: {
           ...action,
           plan: plan ?? null,
+          proposalHash:
+            action.type === "ACCEPT" || action.type === "REJECT"
+              ? (s.input.proposal?.hash ?? null)
+              : (action.proposalHash ?? null),
           recipientId: internal
             ? null
             : otherRecipients.length

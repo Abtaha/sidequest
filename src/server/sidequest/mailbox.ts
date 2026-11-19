@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, or } from "drizzle-orm";
 import { agentMessages } from "../db/schema";
 import { type Store } from "./storage";
 import { DomainError } from "./types";
@@ -17,7 +17,7 @@ export class Mailbox {
       .where(eq(agentMessages.conversationId, this.conversationId))
       .orderBy(asc(agentMessages.turn));
   }
-  async context(userId: string) {
+  async context(userId: string, fromTurn?: number) {
     if (!this.participants.includes(userId))
       throw new DomainError("FORBIDDEN", "Unauthorized mailbox");
     return this.store
@@ -26,6 +26,9 @@ export class Mailbox {
       .where(
         and(
           eq(agentMessages.conversationId, this.conversationId),
+          fromTurn === undefined
+            ? undefined
+            : gte(agentMessages.turn, fromTurn),
           or(
             eq(agentMessages.senderId, userId),
             eq(agentMessages.recipientId, userId),

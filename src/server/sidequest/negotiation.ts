@@ -346,11 +346,12 @@ export class NegotiationService {
       reason: detail.reason,
     });
   }
-  private async fail(id: string, reason: string) {
-    await this.db.transaction(async (tx) => {
+  private fail(id: string, turn: number, reason: string) {
+    return this.db.transaction(async (tx) => {
       await lock(tx, `negotiation:${id}`);
       const { n } = await this.load(id, tx);
-      if (!running.includes(n.status)) return;
+      if (!running.includes(n.status)) return false;
+      if (n.turn !== turn) return true;
       await tx
         .update(s.negotiations)
         .set({
@@ -361,6 +362,7 @@ export class NegotiationService {
         })
         .where(eq(s.negotiations.id, id));
       await this.event(tx, id, "FAILED", { reason });
+      return false;
     });
   }
   async tick(id: string) {
@@ -373,8 +375,7 @@ export class NegotiationService {
     try {
       checkContacts(members, quest.constraints.excludedUsers);
     } catch {
-      await this.fail(id, "CONTACT_PERMISSION_CHANGED");
-      return false;
+      return this.fail(id, n.turn, "CONTACT_PERMISSION_CHANGED");
     }
     let pending = n.pendingAction;
     if (!pending) {
@@ -383,12 +384,35 @@ export class NegotiationService {
         conversation.id,
         conversation.participants,
       ).transcript();
-      const [proposal] = n.activeProposalId
+      const [revision] = await this.db
+        .select()
+        .from(s.negotiationEvents)
+        .where(
+          and(
+            eq(s.negotiationEvents.negotiationId, id),
+            eq(s.negotiationEvents.type, "REVISION_REQUESTED"),
+          ),
+        )
+        .orderBy(desc(s.negotiationEvents.createdAt))
+        .limit(1);
+      const revisionTurn =
+        typeof revision?.detail.startTurn === "number"
+          ? revision.detail.startTurn
+          : undefined;
+      const revisionOwner = revision?.detail.userId;
+      const proposals = n.round
         ? await this.db
             .select()
             .from(s.proposals)
-            .where(eq(s.proposals.id, n.activeProposalId))
+            .where(eq(s.proposals.negotiationId, id))
+            .orderBy(desc(s.proposals.version))
         : [];
+      const proposal = proposals.find((p) => p.id === n.activeProposalId);
+      const priorProposal = revision
+        ? proposals.find(
+            (p) => p.createdAt <= revision.createdAt && p.id !== proposal?.id,
+          )
+        : undefined;
       const decisions = proposal
         ? await this.db
             .select()
@@ -411,7 +435,11 @@ export class NegotiationService {
           ),
       );
       const actor =
-        incoming?.recipientId ??
+        (n.turn === revisionTurn &&
+        typeof revisionOwner === "string" &&
+        conversation.participants.includes(revisionOwner)
+          ? revisionOwner
+          : incoming?.recipientId) ??
         decisions.find((decision) => !decision.agentAccepted)?.userId ??
         conversation.participants[n.turn % conversation.participants.length]!;
       const allowed = await this.db.transaction(async (tx) => {
@@ -444,14 +472,17 @@ export class NegotiationService {
       if (!allowed) {
         const fresh = await this.load(id);
         if (fresh.n.turn === n.turn && !fresh.n.pendingAction)
-          await this.fail(id, "RESOURCE_BUDGET_EXHAUSTED");
-        return false;
+          return this.fail(id, n.turn, "RESOURCE_BUDGET_EXHAUSTED");
+        return running.includes(fresh.n.status);
       }
       try {
-        const options = await new EventAgent(this.db, this.model).options(
-          members,
-          quest.constraints,
-        );
+        const proposedHashes = new Set(proposals.map((p) => p.hash));
+        const options = (
+          await new EventAgent(this.db, this.model).options(
+            members,
+            quest.constraints,
+          )
+        ).filter(({ plan }) => !proposedHashes.has(proposalHash(plan)));
         const [advice] = await this.db
           .select()
           .from(s.negotiationEvents)
@@ -459,6 +490,9 @@ export class NegotiationService {
             and(
               eq(s.negotiationEvents.negotiationId, id),
               eq(s.negotiationEvents.type, "EVENT_OPTIONS"),
+              revision
+                ? gte(s.negotiationEvents.createdAt, revision.createdAt)
+                : undefined,
             ),
           )
           .orderBy(desc(s.negotiationEvents.createdAt))
@@ -468,7 +502,17 @@ export class NegotiationService {
           input: {
             userId: actor,
             conversationId: conversation.id,
-            intent: quest.intent,
+            intent: revision
+              ? "Renegotiate the existing plan with the same group."
+              : quest.intent,
+            revisionTurn,
+            previousActivity: priorProposal?.activitySnapshot.title,
+            revisionInstruction:
+              actor === revisionOwner &&
+              typeof revision?.detail.instruction === "string"
+                ? revision.detail.instruction
+                : undefined,
+            interestQuery: proposal?.activitySnapshot.title,
             participants: conversation.participants,
             incomingFrom: incoming?.senderId,
             proposal: proposal ?? null,
@@ -502,8 +546,7 @@ export class NegotiationService {
               .where(eq(s.negotiations.id, id));
         });
       } catch {
-        await this.fail(id, "MODEL_OR_CONTEXT_FAILURE");
-        return false;
+        return this.fail(id, n.turn, "MODEL_OR_CONTEXT_FAILURE");
       }
     }
     try {
@@ -530,8 +573,7 @@ export class NegotiationService {
           return true;
         });
         if (!reserved) {
-          await this.fail(id, "RESOURCE_BUDGET_EXHAUSTED");
-          return false;
+          return this.fail(id, pending.turn, "RESOURCE_BUDGET_EXHAUSTED");
         }
         advice = await new EventAgent(this.db, this.model).consult(
           members,
@@ -545,7 +587,7 @@ export class NegotiationService {
         error instanceof DomainError
           ? `INVALID_ACTION:${error.message}`
           : "ACTION_OR_DATABASE_FAILURE";
-      await this.fail(id, reason);
+      return this.fail(id, pending.turn, reason);
     }
     return running.includes((await this.load(id)).n.status);
   }
@@ -954,8 +996,9 @@ export class NegotiationService {
       instruction: string;
       requestId: string;
     },
+    store: Store = this.db,
   ) {
-    return this.db.transaction(async (tx) => {
+    return store.transaction(async (tx) => {
       await lock(tx, `negotiation:${input.negotiationId}`);
       const { n, conversation } = await this.authorized(
         userId,
@@ -1014,11 +1057,7 @@ export class NegotiationService {
         instruction: input.instruction,
         constraints: input.constraints,
         requestId: input.requestId,
-      });
-      await tx.insert(s.agentEpisodes).values({
-        userId,
-        kind: "REVISION_REQUESTED",
-        summary: input.instruction,
+        startTurn: n.turn + 1,
       });
       return result!;
     });

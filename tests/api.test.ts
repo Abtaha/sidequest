@@ -47,11 +47,12 @@ beforeAll(async () => {
   f = await database();
   await seed(f.db, new Date("2099-01-01T00:00:00Z"));
   const model = new QueueModel([]),
-    memory = new MemoryService(f.db, model);
+    memory = new MemoryService(f.db, model),
+    negotiation = new NegotiationService(f.db, model, memory);
   mocks.services.mockReturnValue({
     memory,
-    scout: new ScoutService(f.db, model, memory),
-    negotiation: new NegotiationService(f.db, model, memory),
+    scout: new ScoutService(f.db, model, memory, negotiation),
+    negotiation,
   });
 });
 afterAll(async () => {

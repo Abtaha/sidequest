@@ -16,29 +16,30 @@ function create() {
   const memory = new MemoryService(db, model);
   const checkpointer = PostgresSaver.fromConnString(process.env.DATABASE_URL!);
   // Run pnpm db:checkpoints once during setup, not on every API invocation.
+  const negotiation = new NegotiationService(
+    db,
+    model,
+    memory,
+    {
+      ...defaultLimits,
+      calls: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .parse(process.env.SIDEQUEST_MAX_LLM_CALLS ?? defaultLimits.calls),
+      tokens: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .parse(process.env.SIDEQUEST_TOKEN_BUDGET ?? defaultLimits.tokens),
+    },
+    checkpointer,
+  );
   return {
     memory,
-    scout: new ScoutService(db, model, memory),
-    negotiation: new NegotiationService(
-      db,
-      model,
-      memory,
-      {
-        ...defaultLimits,
-        calls: z.coerce
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .parse(process.env.SIDEQUEST_MAX_LLM_CALLS ?? defaultLimits.calls),
-        tokens: z.coerce
-          .number()
-          .int()
-          .min(1)
-          .parse(process.env.SIDEQUEST_TOKEN_BUDGET ?? defaultLimits.tokens),
-      },
-      checkpointer,
-    ),
+    scout: new ScoutService(db, model, memory, negotiation),
+    negotiation,
   };
 }
 export function services() {

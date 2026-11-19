@@ -4,12 +4,13 @@ import { eq, and } from "drizzle-orm";
 import { database } from "./database";
 import { QueueModel } from "./scripted-model";
 import { MemoryService } from "../src/server/sidequest/memory";
+import { NegotiationService } from "../src/server/sidequest/negotiation";
 import { ScoutService } from "../src/server/sidequest/scout";
 import { boundary } from "../src/server/sidequest/model";
 import * as s from "../src/server/db/schema";
 import type { Candidate } from "../src/server/sidequest/types";
 let fixture: Awaited<ReturnType<typeof database>>;
-let model: QueueModel, memory: MemoryService;
+let model: QueueModel, memory: MemoryService, scout: ScoutService;
 const uid = "memory-user";
 function candidate(
   content: string,
@@ -66,6 +67,12 @@ beforeEach(async () => {
   await fixture.db.delete(s.userMemories).where(eq(s.userMemories.userId, uid));
   model = new QueueModel([]);
   memory = new MemoryService(fixture.db, model);
+  scout = new ScoutService(
+    fixture.db,
+    model,
+    memory,
+    new NegotiationService(fixture.db, model, memory),
+  );
 });
 describe("persistent memory", () => {
   it("extracts separate preferences with provenance", async () => {
@@ -96,7 +103,6 @@ describe("persistent memory", () => {
       { memories: [] },
       { content: "A small indie listening session might suit you." },
     );
-    const scout = new ScoutService(fixture.db, model, memory);
     const first = await scout.send(uid, {
       content: "Loves indie music",
       requestId: randomUUID(),
@@ -253,7 +259,6 @@ describe("persistent memory", () => {
       { memories: [] },
       { content: "I'll look for a game meetup.", planningIntent: intent },
     );
-    const scout = new ScoutService(fixture.db, model, memory);
     const first = await scout.send(uid, request);
     const retry = await scout.send(uid, request);
 
@@ -272,7 +277,6 @@ describe("persistent memory", () => {
       { memories: [candidate(request.content)] },
       { content: "Remembered." },
     );
-    const scout = new ScoutService(fixture.db, model, memory);
     const first = await scout.send(uid, request),
       second = await scout.send(uid, request);
     expect(second.message.id).toBe(first.message.id);

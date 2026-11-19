@@ -13,10 +13,12 @@ export function ScoutView({
   userName,
   onNavigate,
   onStartPlanning,
+  onRevision,
 }: {
   userName: string;
   onNavigate: (view: View) => void;
   onStartPlanning: (questId: string) => Promise<void>;
+  onRevision: (negotiationId: string) => void;
 }) {
   const utils = api.useUtils();
   const conversations = api.scout.listConversations.useQuery();
@@ -79,7 +81,8 @@ export function ScoutView({
       setDraft("");
       retry.current = null;
       void Promise.all([utils.scout.invalidate(), utils.memory.invalidate()]);
-      if (result.planningQuestId) await startPlan(result.planningQuestId);
+      if (result.revisedNegotiationId) onRevision(result.revisedNegotiationId);
+      else if (result.planningQuestId) await startPlan(result.planningQuestId);
     } catch (error) {
       setError(
         error instanceof Error
