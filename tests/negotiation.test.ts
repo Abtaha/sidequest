@@ -148,6 +148,22 @@ it("uses the validated proposal slot even when Scout supplies a different time",
     .where(eq(s.proposals.negotiationId, n.id));
   expect(proposal?.plan).toEqual(plan);
 });
+it("gives the remaining Scout a turn when two Scouts accept each other's proposal", async () => {
+  const hash = proposalHash(plan);
+  model.replies.push(
+    action("PROPOSE", b, "How about the indie lounge?", { plan }),
+    action("ACCEPT", a, "The lounge works for my user.", {
+      proposalHash: hash,
+    }),
+    action("ACCEPT", b, "It also works for my user.", { proposalHash: hash }),
+    action("ACCEPT", a, "My user can join too.", { proposalHash: hash }),
+  );
+
+  const result = await service.run(a, n.id);
+  expect(result.status).toBe("AWAITING_APPROVAL");
+  expect(result.turn).toBe(4);
+  expect(model.inputs[3]?.data).toMatchObject({ userId: c });
+});
 it("requires all humans to approve identical version/hash", async () => {
   const input = await agree();
   expect((await service.load(n.id)).n.status).toBe("AWAITING_APPROVAL");
