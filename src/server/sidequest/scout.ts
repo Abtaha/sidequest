@@ -1,20 +1,26 @@
-import { and, eq, desc, notExists } from "drizzle-orm";
+import { and, eq, desc, inArray, notExists, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   scoutConversations,
   scoutMessages,
   sidequests,
+  agentConversations,
+  negotiationEvents,
+  negotiations,
+  proposals,
   userMemories,
 } from "../db/schema";
 import { type Database, lock } from "./storage";
 import { type Model } from "./model";
 import { type MemoryService } from "./memory";
+import { type NegotiationService } from "./negotiation";
 import { DomainError } from "./types";
 export class ScoutService {
   constructor(
     private db: Database,
     private model: Model,
     private memory: MemoryService,
+    private negotiation: NegotiationService,
   ) {}
   async send(
     userId: string,
@@ -96,10 +102,22 @@ export class ScoutService {
             eq(sidequests.requestId, source.id),
           ),
         );
+      const [revision] = await this.db
+        .select({ id: negotiationEvents.negotiationId })
+        .from(negotiationEvents)
+        .where(
+          and(
+            eq(negotiationEvents.type, "REVISION_REQUESTED"),
+            sql`${negotiationEvents.detail}->>'requestId' = ${source.id}`,
+            sql`${negotiationEvents.detail}->>'userId' = ${userId}`,
+          ),
+        )
+        .limit(1);
       return {
         conversationId: source.conversationId,
         message,
         planningQuestId: quest?.id,
+        revisedNegotiationId: revision?.id,
       };
     };
     if (priorReply) return resultFor(priorReply);
@@ -140,10 +158,11 @@ export class ScoutService {
         .orderBy(desc(scoutMessages.createdAt))
         .limit(10);
       const reply = await this.model.generate(
-        "Reply conversationally as the user's personal Scout. Use relevant retrieved memories, including corrections and confidence. Inspect only the latest message for a direct request from the user to find, organize, or coordinate an activity. If it is such a request, set planningIntent to a concise standalone summary of the activity and necessary preferences, dates and limits, in the user's language. Omit private or unrelated details. Vague activity requests such as 'Find me something fun this weekend' count. For casual chat, preference updates, hypothetical or quoted requests, and requests to modify an existing plan, omit planningIntent. Do not say agents have been contacted or anything has been confirmed. Remembered soft preferences are not hard constraints.",
+        "Reply conversationally as the user's personal Scout. Use relevant retrieved memories, including corrections and confidence. Inspect only the latest message for a direct planning request. For a change to an existing group plan, such as 'let’s go to a movie instead', set revisionInstruction to a concise summary of the requested change and omit planningIntent. For a new activity search or coordination request, set planningIntent to a concise standalone summary with preferences, dates and limits and omit revisionInstruction. Vague requests such as 'Find me something fun this weekend' count. For casual chat, memory updates, hypothetical or quoted requests, omit both fields. Omit private or unrelated details. Do not say agents have been contacted or anything has been confirmed. Remembered soft preferences are not hard constraints.",
         z.object({
           content: z.string().min(1).max(3000),
           planningIntent: z.string().trim().min(1).max(2000).nullish(),
+          revisionInstruction: z.string().trim().min(1).max(1000).nullish(),
         }),
         {
           message: input.content,
@@ -155,7 +174,62 @@ export class ScoutService {
           messages: history.reverse(),
         },
       );
+      const directReplacement =
+        /^\s*(?:let['’]s|can we|could we|how about we)\s+[^\n]+\binstead\s*[.!?]?\s*$/iu.test(
+          input.content,
+        );
+      const revisionInstruction =
+        reply.revisionInstruction ??
+        (directReplacement && input.content.trim().length <= 1000
+          ? input.content.trim()
+          : undefined);
       const message = await this.db.transaction(async (tx) => {
+        const linked = eq(scoutMessages.conversationId, source.conversationId);
+        const candidates = revisionInstruction
+          ? await tx
+              .select({ id: negotiations.id, linked })
+              .from(negotiations)
+              .innerJoin(
+                agentConversations,
+                eq(negotiations.conversationId, agentConversations.id),
+              )
+              .innerJoin(
+                sidequests,
+                eq(agentConversations.sidequestId, sidequests.id),
+              )
+              .leftJoin(
+                scoutMessages,
+                eq(sidequests.requestId, scoutMessages.id),
+              )
+              .leftJoin(
+                proposals,
+                eq(negotiations.activeProposalId, proposals.id),
+              )
+              .where(
+                and(
+                  sql`${agentConversations.participants} @> ${JSON.stringify([userId])}::jsonb`,
+                  or(
+                    eq(negotiations.status, "AWAITING_USER_INPUT"),
+                    and(
+                      inArray(negotiations.status, [
+                        "AWAITING_APPROVAL",
+                        "CONFIRMED",
+                      ]),
+                      sql`(${proposals.plan}->>'end')::timestamptz > now()`,
+                    ),
+                  ),
+                ),
+              )
+              .orderBy(
+                sql`${linked} desc nulls last`,
+                desc(sidequests.createdAt),
+              )
+              .limit(2)
+          : [];
+        const target =
+          candidates[0]?.linked || candidates.length === 1
+            ? candidates[0]
+            : undefined;
         const [savedReply] = await tx
           .insert(scoutMessages)
           .values({
@@ -163,12 +237,27 @@ export class ScoutService {
             conversationId: source.conversationId,
             role: "assistant",
             requestId: input.requestId,
-            content: reply.content,
+            content: revisionInstruction
+              ? target
+                ? "I’ll take that change back to the Scouts in this plan."
+                : "Open the plan you want to change in Plans and send your revision there."
+              : reply.content,
             status: "COMPLETE",
           })
           .onConflictDoNothing()
           .returning();
-        if (savedReply && reply.planningIntent) {
+        if (savedReply && revisionInstruction && target) {
+          await this.negotiation.revise(
+            userId,
+            {
+              negotiationId: target.id,
+              instruction: revisionInstruction,
+              constraints: {},
+              requestId: source.id,
+            },
+            tx,
+          );
+        } else if (savedReply && !revisionInstruction && reply.planningIntent) {
           await tx
             .insert(sidequests)
             .values({
@@ -200,11 +289,12 @@ export class ScoutService {
             )
         )[0]!;
       return resultFor(stored);
-    } catch {
+    } catch (error) {
       await this.db
         .update(scoutMessages)
         .set({ status: "FAILED" })
         .where(eq(scoutMessages.id, source.id));
+      if (error instanceof DomainError) throw error;
       throw new DomainError(
         "PRECONDITION_FAILED",
         "Scout could not finish. Retry with the same request ID; no agreement was made.",

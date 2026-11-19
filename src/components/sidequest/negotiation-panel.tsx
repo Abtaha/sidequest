@@ -267,7 +267,7 @@ export function NegotiationPanel({
                     maxLength={1000}
                     value={instruction}
                     onChange={(event) => setInstruction(event.target.value)}
-                    placeholder="Actually, can we make it 6 PM?"
+                    placeholder="Let’s go to a movie instead."
                     className="mt-2 w-full rounded-xl border p-3"
                   />
                 </label>

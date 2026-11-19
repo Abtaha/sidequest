@@ -151,6 +151,16 @@ export async function seed(db: Database, date = new Date()) {
         start: at(5),
         end: at(8),
       },
+      {
+        id: "00000000-0000-4000-8000-000000000006",
+        title: "Synthetic campus short film screening",
+        category: "ART",
+        cost: 6000,
+        capacity: 5,
+        tags: ["indoor", "movie", "film", "small-group"],
+        start: at(10),
+        end: at(12),
+      },
     ];
     for (const entry of entries)
       await tx

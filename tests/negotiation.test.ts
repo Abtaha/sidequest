@@ -5,6 +5,7 @@ import { MemorySaver } from "@langchain/langgraph";
 import { database } from "./database";
 import { QueueModel } from "./scripted-model";
 import { MemoryService } from "../src/server/sidequest/memory";
+import { ScoutService } from "../src/server/sidequest/scout";
 import {
   NegotiationService,
   defaultLimits,
@@ -184,6 +185,93 @@ it("requires all humans to approve identical version/hash", async () => {
       ),
     );
   expect(episodes).toHaveLength(1);
+});
+it("renegotiates a confirmed plan with the same group from a Scout chat follow-up", async () => {
+  const scout = new ScoutService(
+    f.db,
+    model,
+    new MemoryService(f.db, model),
+    service,
+  );
+  model.replies.push(
+    { memories: [] },
+    {
+      content: "I can look for music.",
+      planningIntent: "Find an indie lounge.",
+    },
+  );
+  const chat = await scout.send(a, {
+    content: "Find an indie lounge.",
+    requestId: randomUUID(),
+  });
+  n = await service.start(a, chat.planningQuestId!, [b, c]);
+  const original = await agree();
+  for (const user of [a, b, c])
+    await service.approve(user, { ...original, approved: true });
+  expect((await service.load(n.id)).n.status).toBe("CONFIRMED");
+
+  const change = "Let’s go to a movie instead.";
+  const request = {
+    content: change,
+    conversationId: chat.conversationId,
+    requestId: randomUUID(),
+  };
+  model.replies.push(
+    { memories: [] },
+    { content: "I can ask.", planningIntent: "Find a movie screening." },
+  );
+  const result = await scout.send(a, request);
+  expect(result.revisedNegotiationId).toBe(n.id);
+  expect(result.planningQuestId).toBeUndefined();
+  const revised = (await service.load(n.id)).n;
+  expect(revised.activeProposalId).toBeNull();
+  expect((await scout.send(a, request)).revisedNegotiationId).toBe(n.id);
+  expect((await service.load(n.id)).n.turn).toBe(revised.turn);
+
+  const movie = (
+    await new EventAgent(f.db, model).options(
+      await service.participants([a, b, c], {}),
+    )
+  ).find(({ activity }) => activity.tags.includes("movie"))!.plan;
+  const proposalHashForMovie = proposalHash(movie);
+  const firstTurn = model.inputs.length;
+  model.replies.push(
+    action("PROPOSE", b, "How about a short film screening?", { plan: movie }),
+    action("ACCEPT", a, "Indoor films suit my user.", {
+      proposalHash: proposalHashForMovie,
+    }),
+    action("ACCEPT", b, "It works for my user too.", {
+      proposalHash: proposalHashForMovie,
+    }),
+    action("ACCEPT", a, "The screening works for my user.", {
+      proposalHash: proposalHashForMovie,
+    }),
+  );
+  const updated = await service.run(a, n.id);
+  expect(updated).toMatchObject({ status: "AWAITING_APPROVAL", round: 2 });
+  expect(model.inputs[firstTurn]?.data).toMatchObject({
+    userId: a,
+    revisionInstruction: change,
+    privateContext: { transcript: [] },
+  });
+  expect(model.inputs[firstTurn + 1]?.data).toMatchObject({
+    userId: b,
+    revisionInstruction: undefined,
+  });
+  expect(JSON.stringify(model.inputs[firstTurn + 1]?.data)).toContain(
+    "Prefers indoor board games",
+  );
+  const [newProposal] = await f.db
+    .select()
+    .from(s.proposals)
+    .where(eq(s.proposals.id, updated.activeProposalId!));
+  expect(newProposal?.plan).toEqual(movie);
+  expect(
+    await f.db
+      .select()
+      .from(s.approvals)
+      .where(eq(s.approvals.proposalId, updated.activeProposalId!)),
+  ).toEqual([]);
 });
 it("invalidates stale human and agent approvals on revision and resumes", async () => {
   const input = await agree();
