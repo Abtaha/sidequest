@@ -383,10 +383,6 @@ export class NegotiationService {
         conversation.id,
         conversation.participants,
       ).transcript();
-      const incoming = messages.find((m) => m.status === "PENDING");
-      let actor =
-        incoming?.recipientId ??
-        conversation.participants[n.turn % conversation.participants.length]!;
       const [proposal] = n.activeProposalId
         ? await this.db
             .select()
@@ -399,8 +395,25 @@ export class NegotiationService {
             .from(s.proposalParticipants)
             .where(eq(s.proposalParticipants.proposalId, proposal.id))
         : [];
-      if (!incoming && decisions.length)
-        actor = decisions.find((d) => !d.agentAccepted)?.userId ?? actor;
+      // An acceptance is a vote, so its delivery should not pull a Scout
+      // who already accepted back into a loop while other Scouts await a turn.
+      const incoming = messages.find(
+        (message) =>
+          message.status === "PENDING" &&
+          !(
+            message.type === "ACCEPT" &&
+            message.proposalHash === proposal?.hash &&
+            decisions.some(
+              (decision) =>
+                decision.userId === message.recipientId &&
+                decision.agentAccepted,
+            )
+          ),
+      );
+      const actor =
+        incoming?.recipientId ??
+        decisions.find((decision) => !decision.agentAccepted)?.userId ??
+        conversation.participants[n.turn % conversation.participants.length]!;
       const allowed = await this.db.transaction(async (tx) => {
         await lock(tx, `negotiation:${id}`);
         const { n: current } = await this.load(id, tx);
