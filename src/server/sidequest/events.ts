@@ -11,7 +11,14 @@ export class EventAgent {
     private model: Model,
   ) {}
   async options(participants: Participant[], constraints: Constraints = {}) {
-    const rows = await this.store
+    return this.optionsFor(
+      await this.catalog(constraints),
+      participants,
+      constraints,
+    );
+  }
+  async catalog(constraints: Constraints) {
+    return this.store
       .select()
       .from(activities)
       .where(
@@ -22,6 +29,12 @@ export class EventAgent {
       )
       .orderBy(activities.start)
       .limit(100);
+  }
+  optionsFor(
+    rows: (typeof activities.$inferSelect)[],
+    participants: Participant[],
+    constraints: Constraints,
+  ) {
     const options: { activity: typeof activities.$inferSelect; plan: Plan }[] =
       [];
     for (const activity of rows) {

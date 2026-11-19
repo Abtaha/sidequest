@@ -146,6 +146,14 @@ export default function SideQuestApp({
     setError("");
     resume.mutate({ id });
   }
+  async function startPlanning(sidequestId: string, candidateIds?: string[]) {
+    setError("");
+    const n = await start.mutateAsync({ sidequestId, candidateIds });
+    setSelected(null);
+    setSelectedNegotiation(n.id);
+    void utils.sidequest.invalidate();
+    if (n.status === "DISCOVERING" || n.status === "NEGOTIATING") run(n.id);
+  }
   async function coordinate(intent: string, candidateIds?: string[]) {
     if (pending || !intent.trim()) return;
     setError("");
@@ -158,17 +166,10 @@ export default function SideQuestApp({
         requestId: retry.current.requestId,
         constraints: {},
       });
-      const n = await start.mutateAsync({
-        sidequestId: quest.id,
-        candidateIds,
-      });
+      await startPlanning(quest.id, candidateIds);
       retry.current = null;
-      setSelected(null);
       setRequest("");
-      setSelectedNegotiation(n.id);
       setActiveView("Plans");
-      await utils.sidequest.invalidate();
-      run(n.id);
     } catch (error) {
       setError(
         error instanceof Error ? error.message : "Could not start planning.",
@@ -236,7 +237,11 @@ export default function SideQuestApp({
           />
         )}
         {activeView === "Scout" && (
-          <ScoutView userName={userName} onNavigate={navigate} />
+          <ScoutView
+            userName={userName}
+            onNavigate={navigate}
+            onStartPlanning={startPlanning}
+          />
         )}
         {activeView === "Discover" && (
           <DiscoverView

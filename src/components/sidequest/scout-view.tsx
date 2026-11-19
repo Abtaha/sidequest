@@ -12,9 +12,11 @@ type MemoryRecord = RouterOutputs["memory"]["list"][number];
 export function ScoutView({
   userName,
   onNavigate,
+  onStartPlanning,
 }: {
   userName: string;
   onNavigate: (view: View) => void;
+  onStartPlanning: (questId: string) => Promise<void>;
 }) {
   const utils = api.useUtils();
   const conversations = api.scout.listConversations.useQuery();
@@ -38,10 +40,29 @@ export function ScoutView({
     requestId: string;
   } | null>(null);
   const send = api.scout.sendMessage.useMutation();
+  const [planning, setPlanning] = React.useState(false);
+  const [retryQuestId, setRetryQuestId] = React.useState<string>();
+  async function startPlan(questId: string) {
+    setPlanning(true);
+    setError("");
+    try {
+      await onStartPlanning(questId);
+      setRetryQuestId(undefined);
+    } catch (error) {
+      setRetryQuestId(questId);
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Scout could not start planning.",
+      );
+    } finally {
+      setPlanning(false);
+    }
+  }
   const update = api.memory.update.useMutation(),
     remove = api.memory.delete.useMutation();
   async function sendMessage(content = draft) {
-    if (!content.trim() || send.isPending) return;
+    if (!content.trim() || send.isPending || planning) return;
     if (
       retry.current?.content !== content ||
       retry.current.conversationId !== conversationId
@@ -57,7 +78,8 @@ export function ScoutView({
       setSelection(result.conversationId);
       setDraft("");
       retry.current = null;
-      await Promise.all([utils.scout.invalidate(), utils.memory.invalidate()]);
+      void Promise.all([utils.scout.invalidate(), utils.memory.invalidate()]);
+      if (result.planningQuestId) await startPlan(result.planningQuestId);
     } catch (error) {
       setError(
         error instanceof Error
@@ -101,6 +123,22 @@ export function ScoutView({
               conversation.error?.message ??
               memories.error?.message)}
         </p>
+      )}
+      {planning && (
+        <p role="status" className="mt-4 text-sm">
+          Scout is finding people to plan with…
+        </p>
+      )}
+      {retryQuestId && (
+        <Button
+          design
+          type="button"
+          disabled={planning}
+          onClick={() => void startPlan(retryQuestId)}
+          className="mt-3 rounded-lg border px-3 py-2 text-sm"
+        >
+          Retry planning
+        </Button>
       )}
       <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_300px]">
         <section className="flex min-h-[580px] flex-col overflow-hidden rounded-[26px] border border-[#dfe2da] bg-white">
@@ -225,7 +263,7 @@ export function ScoutView({
               <Button
                 design
                 type="submit"
-                disabled={send.isPending || !draft.trim()}
+                disabled={send.isPending || planning || !draft.trim()}
                 aria-label="Send message to Scout"
                 className="grid h-11 w-11 place-items-center rounded-xl bg-[#244a36] text-white disabled:opacity-35"
               >

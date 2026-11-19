@@ -27,6 +27,7 @@ import {
   type Participant,
 } from "./constraints";
 import { EventAgent } from "./events";
+import { rankCandidatesByInterest } from "./discovery";
 export const defaultLimits = {
   messages: 20,
   rounds: 3,
@@ -198,45 +199,111 @@ export class NegotiationService {
           )
           .orderBy(asc(s.profiles.userId))
           .limit(100);
-        for (const c of candidates) {
-          if (
-            c.userId === userId ||
-            ids.length >=
-              Math.min(
-                5,
-                quest.constraints.maxGroup ?? 5,
-                own.constraints.maxGroup ?? 5,
-              )
-          )
-            continue;
+        const members = await this.participants(
+          [
+            ...new Set([
+              userId,
+              ...candidates.map((candidate) => candidate.userId),
+            ]),
+          ],
+          {},
+          tx,
+        );
+        const owner = members.find((member) => member.userId === userId)!;
+        const permitted = members.filter((candidate) => {
+          if (candidate.userId === userId) return false;
           try {
-            checkContacts(
-              await this.participants([...ids, c.userId], {}, tx),
-              quest.constraints.excludedUsers,
-            );
-            ids.push(c.userId);
-          } catch {
-            /* Respect bilateral discovery restrictions. */
+            checkContacts([owner, candidate], quest.constraints.excludedUsers);
+            return true;
+          } catch (error) {
+            if (error instanceof DomainError) return false;
+            throw error;
           }
-        }
-        if (ids.length > 1) {
-          const eventAgent = new EventAgent(tx, this.model);
-          const group = await this.participants(ids, {}, tx);
-          if (!(await eventAgent.options(group, quest.constraints)).length) {
-            // A permitted group can still have no common time or activity.
-            // Validate fallback pairs with the same hard constraints as proposals.
-            for (const candidate of candidates) {
-              if (candidate.userId === userId) continue;
-              const pair = [userId, candidate.userId];
-              const members = await this.participants(pair, {}, tx);
-              if (
-                (await eventAgent.options(members, quest.constraints)).length
-              ) {
-                ids = pair;
-                break;
-              }
+        });
+        const interests = await tx
+          .select({
+            userId: s.userMemories.userId,
+            content: s.userMemories.content,
+          })
+          .from(s.userMemories)
+          .where(
+            and(
+              inArray(s.userMemories.userId, [
+                userId,
+                ...permitted.map((candidate) => candidate.userId),
+              ]),
+              inArray(s.userMemories.category, ["INTEREST", "PREFERENCE"]),
+              inArray(s.userMemories.scope, ["PERSISTENT", "TEMPORARY"]),
+              eq(s.userMemories.status, "ACTIVE"),
+              or(
+                isNull(s.userMemories.expiresAt),
+                gt(s.userMemories.expiresAt, new Date()),
+              ),
+            ),
+          );
+        const ranked = rankCandidatesByInterest(
+          userId,
+          quest.intent,
+          permitted,
+          interests,
+        );
+        const relevant = ranked.filter((candidate) => candidate.score > 0);
+        const maxGroup = Math.min(
+          5,
+          quest.constraints.maxGroup ?? 5,
+          own.constraints.maxGroup ?? 5,
+        );
+        const minGroup = Math.max(
+          2,
+          quest.constraints.minGroup ?? 2,
+          own.constraints.minGroup ?? 2,
+        );
+        const eventAgent = new EventAgent(tx, this.model);
+        const catalog = await eventAgent.catalog(quest.constraints);
+        for (const pool of relevant.length ? [relevant, ranked] : [ranked]) {
+          const group = [owner];
+          for (const { candidate } of pool) {
+            if (group.length >= maxGroup) break;
+            const trial = [...group, candidate];
+            try {
+              checkContacts(trial, quest.constraints.excludedUsers);
+            } catch (error) {
+              if (error instanceof DomainError) continue;
+              throw error;
+            }
+            // Before the required group size is reached, test schedule and other
+            // constraints while leaving minimum group size for final validation.
+            const partial = trial.map((member) => ({
+              ...member,
+              constraints: { ...member.constraints, minGroup: undefined },
+              session: { ...member.session, minGroup: undefined },
+              memoryConstraints: member.memoryConstraints?.map(
+                (constraint) => ({
+                  ...constraint,
+                  minGroup: undefined,
+                }),
+              ),
+            }));
+            const options = eventAgent.optionsFor(catalog, partial, {
+              ...quest.constraints,
+              minGroup: undefined,
+            });
+            if (!options.length) continue;
+            group.push(candidate);
+            if (
+              group.length >= minGroup &&
+              eventAgent.optionsFor(catalog, group, quest.constraints).length
+            ) {
+              ids = group.map((member) => member.userId);
             }
           }
+          if (ids.length > 1) break;
+        }
+        if (ids.length === 1) {
+          throw new DomainError(
+            "PRECONDITION_FAILED",
+            "No one in your planning circle has a compatible upcoming activity. Try a different time or ask a specific person from People.",
+          );
         }
       }
       ids = [...new Set(ids)];
