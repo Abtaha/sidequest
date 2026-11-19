@@ -28,6 +28,7 @@ export const scoutRouter = createTRPCRouter({
     .input(
       z.object({
         conversationId: z.string().uuid().optional(),
+        revisionNegotiationId: z.string().uuid().optional(),
         requestId: z.string().uuid(),
         content: z.string().min(1).max(6000),
       }),

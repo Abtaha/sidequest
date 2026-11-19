@@ -13,8 +13,8 @@ import { type Database, type Store, lock } from "./storage";
 import {
   DomainError,
   actionSchema,
+  relativeTimeChange,
   type Constraints,
-  type AgentAction,
 } from "./types";
 import { type Model, log, modelLimits } from "./model";
 import { type MemoryService } from "./memory";
@@ -322,7 +322,7 @@ export class NegotiationService {
       await tx.insert(s.negotiationEvents).values({
         negotiationId: n!.id,
         type: "STARTED",
-        detail: { participants: ids },
+        detail: { participants: ids, flexibleGroup: !candidateIds },
       });
       return n!;
     });
@@ -400,6 +400,10 @@ export class NegotiationService {
           ? revision.detail.startTurn
           : undefined;
       const revisionOwner = revision?.detail.userId;
+      const revisionInstruction =
+        typeof revision?.detail.instruction === "string"
+          ? revision.detail.instruction
+          : undefined;
       const proposals = n.round
         ? await this.db
             .select()
@@ -413,6 +417,10 @@ export class NegotiationService {
             (p) => p.createdAt <= revision.createdAt && p.id !== proposal?.id,
           )
         : undefined;
+      const move =
+        priorProposal && revisionInstruction
+          ? relativeTimeChange(revisionInstruction)
+          : undefined;
       const decisions = proposal
         ? await this.db
             .select()
@@ -426,12 +434,12 @@ export class NegotiationService {
           message.status === "PENDING" &&
           !(
             message.type === "ACCEPT" &&
-            message.proposalHash === proposal?.hash &&
-            decisions.some(
-              (decision) =>
-                decision.userId === message.recipientId &&
-                decision.agentAccepted,
-            )
+            (message.proposalHash !== proposal?.hash ||
+              decisions.some(
+                (decision) =>
+                  decision.userId === message.recipientId &&
+                  decision.agentAccepted,
+              ))
           ),
       );
       const actor =
@@ -481,8 +489,19 @@ export class NegotiationService {
           await new EventAgent(this.db, this.model).options(
             members,
             quest.constraints,
+            Boolean(proposal ?? move),
+            move ? priorProposal?.plan.activityId : undefined,
           )
-        ).filter(({ plan }) => !proposedHashes.has(proposalHash(plan)));
+        ).filter(({ plan }) => {
+          if (proposedHashes.has(proposalHash(plan))) return false;
+          if (!move || !priorProposal) return true;
+          return (
+            plan.activityId === priorProposal.plan.activityId &&
+            (move === "later"
+              ? plan.start > priorProposal.plan.start
+              : plan.start < priorProposal.plan.start)
+          );
+        });
         const [advice] = await this.db
           .select()
           .from(s.negotiationEvents)
@@ -498,29 +517,39 @@ export class NegotiationService {
           .orderBy(desc(s.negotiationEvents.createdAt))
           .limit(1);
         const started = Date.now();
-        const result = await this.personal.invoke({
-          input: {
-            userId: actor,
-            conversationId: conversation.id,
-            intent: revision
-              ? "Renegotiate the existing plan with the same group."
-              : quest.intent,
-            revisionTurn,
-            previousActivity: priorProposal?.activitySnapshot.title,
-            revisionInstruction:
-              actor === revisionOwner &&
-              typeof revision?.detail.instruction === "string"
-                ? revision.detail.instruction
-                : undefined,
-            interestQuery: proposal?.activitySnapshot.title,
-            participants: conversation.participants,
-            incomingFrom: incoming?.senderId,
-            proposal: proposal ?? null,
-            constraints: members.find((p) => p.userId === actor),
-            options,
-            eventAdvice: advice?.detail ?? null,
-          },
-        });
+        const result =
+          move && !options.length && !proposal
+            ? {
+                action: {
+                  type: "REQUEST_HUMAN",
+                  recipientId: null,
+                  plan: null,
+                  proposalHash: null,
+                  content: `I couldn’t find an ${move === "later" ? "available later" : "available earlier"} time for everyone. Would a different day or activity work?`,
+                },
+              }
+            : await this.personal.invoke({
+                input: {
+                  userId: actor,
+                  conversationId: conversation.id,
+                  intent: revision
+                    ? "Renegotiate the existing plan with the same group."
+                    : quest.intent,
+                  revisionTurn,
+                  previousActivity: priorProposal?.activitySnapshot.title,
+                  previousStart: priorProposal?.plan.start,
+                  revisionInstruction:
+                    actor === revisionOwner ? revisionInstruction : undefined,
+                  interestQuery: proposal?.activitySnapshot.title,
+                  participants: conversation.participants,
+                  incomingFrom: incoming?.senderId,
+                  incomingMessageId: incoming?.id,
+                  proposal: proposal ?? null,
+                  constraints: members.find((p) => p.userId === actor),
+                  options,
+                  eventAdvice: advice?.detail ?? null,
+                },
+              });
         log("agent_invocation", {
           negotiationId: id,
           agentId: actor,
@@ -531,6 +560,7 @@ export class NegotiationService {
           actor,
           action: actionSchema.parse(result.action),
           turn: n.turn,
+          incomingMessageId: incoming?.id,
         };
         await this.db.transaction(async (tx) => {
           await lock(tx, `negotiation:${id}`);
@@ -593,7 +623,7 @@ export class NegotiationService {
   }
   async execute(
     id: string,
-    pending: { actor: string; action: AgentAction; turn: number },
+    pending: NonNullable<typeof s.negotiations.$inferSelect.pendingAction>,
     advice?: unknown,
   ) {
     await this.db.transaction(async (tx) => {
@@ -614,9 +644,12 @@ export class NegotiationService {
       checkContacts(members, quest.constraints.excludedUsers);
       if (!conversation.participants.includes(actor))
         throw new DomainError("FORBIDDEN", "Unauthorized sender");
-      const internal = ["CONSULT_EVENTS", "REQUEST_HUMAN", "END"].includes(
-        action.type,
-      );
+      const internal = [
+        "CONSULT_EVENTS",
+        "REQUEST_HUMAN",
+        "END",
+        "WITHDRAW",
+      ].includes(action.type);
       if (
         !internal &&
         (!action.recipientId ||
@@ -764,7 +797,57 @@ export class NegotiationService {
           );
       } else if (action.type === "REQUEST_HUMAN")
         status = "AWAITING_USER_INPUT";
-      else if (["END", "WITHDRAW"].includes(action.type)) status = "FAILED";
+      else if (action.type === "WITHDRAW") {
+        const remaining = members.filter((member) => member.userId !== actor);
+        const [started] = await tx
+          .select()
+          .from(s.negotiationEvents)
+          .where(
+            and(
+              eq(s.negotiationEvents.negotiationId, id),
+              eq(s.negotiationEvents.type, "STARTED"),
+            ),
+          );
+        const [revision] = await tx
+          .select({ id: s.negotiationEvents.id })
+          .from(s.negotiationEvents)
+          .where(
+            and(
+              eq(s.negotiationEvents.negotiationId, id),
+              eq(s.negotiationEvents.type, "REVISION_REQUESTED"),
+            ),
+          )
+          .limit(1);
+        if (
+          started?.detail.flexibleGroup === true &&
+          !revision &&
+          actor !== quest.ownerId &&
+          remaining.length >= 2 &&
+          n.round < this.limits.rounds &&
+          (
+            await new EventAgent(tx, this.model).options(
+              remaining,
+              quest.constraints,
+            )
+          ).length
+        ) {
+          const participants = remaining.map((member) => member.userId);
+          await tx
+            .update(s.agentConversations)
+            .set({ participants })
+            .where(eq(s.agentConversations.id, conversation.id));
+          await tx
+            .update(s.agentMessages)
+            .set({ status: "PROCESSED" })
+            .where(eq(s.agentMessages.conversationId, conversation.id));
+          await this.event(tx, id, "GROUP_UPDATED", {
+            turn: n.turn,
+            participants,
+            departed: actor,
+          });
+          activeId = null;
+        } else status = "FAILED";
+      } else if (action.type === "END") status = "FAILED";
       if (action.type === "CONSULT_EVENTS")
         await this.event(tx, id, "EVENT_OPTIONS", { result: advice });
       else if (!internal) {
@@ -780,11 +863,12 @@ export class NegotiationService {
           turn: n.turn,
         });
       }
-      await new Mailbox(
-        tx,
-        conversation.id,
-        conversation.participants,
-      ).markProcessed(actor);
+      if (pending.incomingMessageId)
+        await new Mailbox(
+          tx,
+          conversation.id,
+          conversation.participants,
+        ).markProcessed(actor, pending.incomingMessageId);
       await tx
         .update(s.negotiations)
         .set({
@@ -793,7 +877,12 @@ export class NegotiationService {
           round,
           status,
           pendingAction: null,
-          failure: status === "FAILED" ? "AGENT_ENDED_NEGOTIATION" : null,
+          failure:
+            status === "FAILED"
+              ? action.type === "WITHDRAW"
+                ? "GROUP_NEEDS_ANOTHER_OPTION"
+                : "AGENT_ENDED_NEGOTIATION"
+              : null,
           updatedAt: new Date(),
         })
         .where(eq(s.negotiations.id, id));
@@ -857,7 +946,7 @@ export class NegotiationService {
           recursionLimit: this.limits.calls + 10,
         },
       );
-      return (await this.load(id)).n;
+      return (await this.authorized(userId, id)).n;
     } finally {
       await this.db
         .update(s.negotiations)

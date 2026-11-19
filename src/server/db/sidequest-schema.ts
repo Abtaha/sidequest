@@ -220,6 +220,7 @@ export const negotiations = pgTable("sq_negotiations", {
     actor: string;
     action: AgentAction;
     turn: number;
+    incomingMessageId?: string;
   }>(),
   updatedAt: time("updated_at"),
 });

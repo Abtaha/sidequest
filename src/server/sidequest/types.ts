@@ -62,6 +62,11 @@ export const actionSchema = z
   })
   .strict();
 export type AgentAction = z.infer<typeof actionSchema>;
+export function relativeTimeChange(instruction: string) {
+  return /^\s*(?:can|could) we (?:do|go|meet|make it) (earlier|later)\s*[.!?]?\s*$/iu
+    .exec(instruction)?.[1]
+    ?.toLowerCase() as "earlier" | "later" | undefined;
+}
 export class DomainError extends Error {
   constructor(
     public code:

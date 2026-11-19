@@ -149,6 +149,170 @@ it("uses the validated proposal slot even when Scout supplies a different time",
     .where(eq(s.proposals.negotiationId, n.id));
   expect(proposal?.plan).toEqual(plan);
 });
+it("can counter with a later slot for the same activity", async () => {
+  await propose();
+  const options = (
+    await new EventAgent(f.db, model).options(
+      await service.participants([a, b, c], {}),
+      { maxCost: 15000 },
+      true,
+    )
+  ).filter((option) => proposalHash(option.plan) !== proposalHash(plan));
+  const index = options.findIndex(
+    (option) =>
+      option.plan.activityId === plan.activityId &&
+      option.plan.start > plan.start,
+  );
+  expect(index).toBeGreaterThanOrEqual(0);
+  model.replies.push({
+    ...action("COUNTER", a, "A later time works for my user."),
+    plan: { activityId: plan.activityId, optionId: String(index + 1) },
+  });
+  expect(await service.tick(n.id)).toBe(true);
+  const updated = (await service.load(n.id)).n;
+  const [revised] = await f.db
+    .select()
+    .from(s.proposals)
+    .where(eq(s.proposals.id, updated.activeProposalId!));
+  expect(revised?.plan).toEqual(options[index]?.plan);
+});
+it("asks for a different day or activity when the current slot is already the latest", async () => {
+  const members = await service.participants([a, b, c], {});
+  const options = await new EventAgent(f.db, model).options(
+    members,
+    { maxCost: 15000 },
+    true,
+    plan.activityId,
+  );
+  const latest = options.reduce((a, b) =>
+    a.plan.start > b.plan.start ? a : b,
+  ).plan;
+  await apply(
+    a,
+    action("PROPOSE", b, "This is the latest time.", { plan: latest }),
+  );
+  await service.revise(a, {
+    negotiationId: n.id,
+    requestId: randomUUID(),
+    instruction: "Could we do later?",
+    constraints: {},
+  });
+  expect(await service.tick(n.id)).toBe(false);
+  expect((await service.load(n.id)).n.status).toBe("AWAITING_USER_INPUT");
+  expect(model.inputs).toHaveLength(0);
+});
+it("routes a brief chat reply directly to the selected plan", async () => {
+  const scout = new ScoutService(
+    f.db,
+    model,
+    new MemoryService(f.db, model),
+    service,
+  );
+  model.replies.push(
+    action("REQUEST_HUMAN", null, "Would a different day work?"),
+  );
+  await service.run(a, n.id);
+  const reply = {
+    content: "Saturday works.",
+    requestId: randomUUID(),
+    revisionNegotiationId: n.id,
+  };
+  await expect(scout.send(syntheticIds[7]!, reply)).rejects.toThrow(
+    "Negotiation not found",
+  );
+  const result = await scout.send(a, reply);
+  expect(result.revisedNegotiationId).toBe(n.id);
+  expect((await service.load(n.id)).n.status).toBe("NEGOTIATING");
+  expect(model.inputs).toHaveLength(1);
+  expect((await scout.send(a, reply)).message.id).toBe(result.message.id);
+});
+it("can continue with a feasible smaller group after a Scout passes", async () => {
+  const quest = await service.create(a, {
+    intent: "Organize a gathering",
+    requestId: randomUUID(),
+    constraints: { maxGroup: 3, maxCost: 15000 },
+  });
+  n = await service.start(a, quest.id);
+  const { conversation } = await service.load(n.id);
+  expect(conversation.participants).toHaveLength(3);
+  const [, departing, remaining] = conversation.participants as [
+    string,
+    string,
+    string,
+  ];
+  const original = (
+    await new EventAgent(f.db, model).options(
+      await service.participants(conversation.participants, {}),
+      quest.constraints,
+    )
+  )[0]!.plan;
+  await apply(
+    a,
+    action("PROPOSE", departing, "An option for the group", { plan: original }),
+  );
+  model.replies.push(action("WITHDRAW", null, "My user will pass."));
+  expect(await service.tick(n.id)).toBe(true);
+  const changed = await service.load(n.id);
+  expect(changed.conversation.participants).toEqual([a, remaining]);
+  expect(changed.n).toMatchObject({
+    activeProposalId: null,
+    status: "NEGOTIATING",
+  });
+  await expect(service.authorized(departing, n.id)).rejects.toThrow(
+    "Negotiation not found",
+  );
+  const replacement = (
+    await new EventAgent(f.db, model).options(
+      await service.participants(changed.conversation.participants, {}),
+      quest.constraints,
+    )
+  )[0]!.plan;
+  await apply(
+    a,
+    action("PROPOSE", remaining, "Two people can still go", {
+      plan: replacement,
+    }),
+  );
+  const proposalHashForPair = proposalHash(replacement);
+  await apply(
+    remaining,
+    action("ACCEPT", a, "I can make it.", {
+      proposalHash: proposalHashForPair,
+    }),
+  );
+  await apply(
+    a,
+    action("ACCEPT", remaining, "Works for my user.", {
+      proposalHash: proposalHashForPair,
+    }),
+  );
+  expect((await service.load(n.id)).n).toMatchObject({
+    status: "AWAITING_APPROVAL",
+    round: 2,
+  });
+});
+it("keeps explicitly invited people in the group if a Scout passes", async () => {
+  await apply(b, action("WITHDRAW", null));
+  const state = await service.load(n.id);
+  expect(state.conversation.participants).toEqual([a, b, c]);
+  expect(state.n.status).toBe("FAILED");
+});
+it("acknowledges only the addressed message a Scout answered", async () => {
+  await apply(a, action("INQUIRY", b, "Are board games okay?"));
+  await apply(c, action("INQUIRY", b, "Would a film work too?"));
+  model.replies.push(action("INFORM", a, "Board games are good."));
+  await service.tick(n.id);
+  const rows = await f.db
+    .select()
+    .from(s.agentMessages)
+    .where(eq(s.agentMessages.conversationId, n.conversationId));
+  expect(rows.find((message) => message.senderId === a)?.status).toBe(
+    "PROCESSED",
+  );
+  expect(rows.find((message) => message.senderId === c)?.status).toBe(
+    "PENDING",
+  );
+});
 it("gives the remaining Scout a turn when two Scouts accept each other's proposal", async () => {
   const hash = proposalHash(plan);
   model.replies.push(
