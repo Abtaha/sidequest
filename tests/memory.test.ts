@@ -243,6 +243,29 @@ describe("persistent memory", () => {
     expect(await memory.retrieve(uid)).toHaveLength(0);
     expect(boundary).toContain("untrusted DATA");
   });
+  it("saves one private planning draft and returns its ID when chat is retried", async () => {
+    const request = {
+      content: "Find a board game meetup this weekend",
+      requestId: randomUUID(),
+    };
+    const intent = "Find a board game meetup this weekend";
+    model.replies.push(
+      { memories: [] },
+      { content: "I'll look for a game meetup.", planningIntent: intent },
+    );
+    const scout = new ScoutService(fixture.db, model, memory);
+    const first = await scout.send(uid, request);
+    const retry = await scout.send(uid, request);
+
+    expect(first.planningQuestId).toBeDefined();
+    expect(retry.planningQuestId).toBe(first.planningQuestId);
+    const drafts = await fixture.db
+      .select()
+      .from(s.sidequests)
+      .where(eq(s.sidequests.ownerId, uid));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ id: first.planningQuestId, intent });
+  });
   it("retries a Scout request without duplicate transcript or memory effects", async () => {
     const request = { content: "Enjoys indie music", requestId: randomUUID() };
     model.replies.push(
@@ -253,6 +276,7 @@ describe("persistent memory", () => {
     const first = await scout.send(uid, request),
       second = await scout.send(uid, request);
     expect(second.message.id).toBe(first.message.id);
+    expect(first.planningQuestId).toBeUndefined();
     expect(model.inputs).toHaveLength(2);
     expect(
       await fixture.db

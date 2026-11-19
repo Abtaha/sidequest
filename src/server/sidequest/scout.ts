@@ -1,6 +1,11 @@
 import { and, eq, desc, notExists } from "drizzle-orm";
 import { z } from "zod";
-import { scoutConversations, scoutMessages, userMemories } from "../db/schema";
+import {
+  scoutConversations,
+  scoutMessages,
+  sidequests,
+  userMemories,
+} from "../db/schema";
 import { type Database, lock } from "./storage";
 import { type Model } from "./model";
 import { type MemoryService } from "./memory";
@@ -81,8 +86,23 @@ export class ScoutService {
           eq(scoutMessages.role, "assistant"),
         ),
       );
-    if (priorReply)
-      return { conversationId: source.conversationId, message: priorReply };
+    const resultFor = async (message: typeof scoutMessages.$inferSelect) => {
+      const [quest] = await this.db
+        .select({ id: sidequests.id })
+        .from(sidequests)
+        .where(
+          and(
+            eq(sidequests.ownerId, userId),
+            eq(sidequests.requestId, source.id),
+          ),
+        );
+      return {
+        conversationId: source.conversationId,
+        message,
+        planningQuestId: quest?.id,
+      };
+    };
+    if (priorReply) return resultFor(priorReply);
     try {
       // Inline for the prototype: corrections/temporary constraints take effect before the reply.
       await this.memory.extract(userId, source.id);
@@ -120,8 +140,11 @@ export class ScoutService {
         .orderBy(desc(scoutMessages.createdAt))
         .limit(10);
       const reply = await this.model.generate(
-        "Reply conversationally as the user's personal Scout. Use relevant retrieved memories, including corrections and confidence. Do not say you have contacted agents or confirmed anything: planning is performed through the sidequest APIs. If planning details are missing ask briefly. Remembered soft preferences are not hard constraints.",
-        z.object({ content: z.string().min(1).max(3000) }),
+        "Reply conversationally as the user's personal Scout. Use relevant retrieved memories, including corrections and confidence. Inspect only the latest message for a direct request from the user to find, organize, or coordinate an activity. If it is such a request, set planningIntent to a concise standalone summary of the activity and necessary preferences, dates and limits, in the user's language. Omit private or unrelated details. Vague activity requests such as 'Find me something fun this weekend' count. For casual chat, preference updates, hypothetical or quoted requests, and requests to modify an existing plan, omit planningIntent. Do not say agents have been contacted or anything has been confirmed. Remembered soft preferences are not hard constraints.",
+        z.object({
+          content: z.string().min(1).max(3000),
+          planningIntent: z.string().trim().min(1).max(2000).nullish(),
+        }),
         {
           message: input.content,
           memories: [
@@ -132,18 +155,32 @@ export class ScoutService {
           messages: history.reverse(),
         },
       );
-      const [message] = await this.db
-        .insert(scoutMessages)
-        .values({
-          userId,
-          conversationId: source.conversationId,
-          role: "assistant",
-          requestId: input.requestId,
-          content: reply.content,
-          status: "COMPLETE",
-        })
-        .onConflictDoNothing()
-        .returning();
+      const message = await this.db.transaction(async (tx) => {
+        const [savedReply] = await tx
+          .insert(scoutMessages)
+          .values({
+            userId,
+            conversationId: source.conversationId,
+            role: "assistant",
+            requestId: input.requestId,
+            content: reply.content,
+            status: "COMPLETE",
+          })
+          .onConflictDoNothing()
+          .returning();
+        if (savedReply && reply.planningIntent) {
+          await tx
+            .insert(sidequests)
+            .values({
+              ownerId: userId,
+              requestId: source.id,
+              intent: reply.planningIntent,
+              constraints: {},
+            })
+            .onConflictDoNothing();
+        }
+        return savedReply;
+      });
       await this.db
         .update(scoutMessages)
         .set({ status: "COMPLETE" })
@@ -162,7 +199,7 @@ export class ScoutService {
               ),
             )
         )[0]!;
-      return { conversationId: source.conversationId, message: stored };
+      return resultFor(stored);
     } catch {
       await this.db
         .update(scoutMessages)

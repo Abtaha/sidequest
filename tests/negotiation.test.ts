@@ -549,3 +549,54 @@ it("enforces user exclusions before any inter-agent contact, including discovery
     await f.db.delete(s.userMemories).where(eq(s.userMemories.id, m!.id));
   }
 });
+
+it("discovers a feasible pair when the larger eligible group cannot meet", async () => {
+  const incompatible = syntheticIds[7]!;
+  const quest = await service.create(a, {
+    requestId: randomUUID(),
+    intent: "Find an upcoming shared activity.",
+    constraints: {
+      excludedUsers: syntheticIds.filter(
+        (id) => ![a, b, incompatible].includes(id),
+      ),
+    },
+  });
+
+  const negotiation = await service.start(a, quest.id);
+  const { conversation } = await service.load(negotiation.id);
+
+  expect(conversation.participants).toEqual([a, b]);
+});
+
+it("shortlists relevant interests before negotiating and skips expired interests", async () => {
+  const specialist = syntheticIds[3]!;
+  const insert = (userId: string, expiresAt?: Date) => ({
+    userId,
+    category: "INTEREST" as const,
+    key: "chess",
+    content: "Enjoys chess",
+    scope: "PERSISTENT" as const,
+    confidence: 100,
+    explicit: true,
+    expiresAt,
+  });
+  const memories = await f.db
+    .insert(s.userMemories)
+    .values([insert(b, new Date(0)), insert(specialist)])
+    .returning();
+  try {
+    const quest = await service.create(a, {
+      requestId: randomUUID(),
+      intent: "Find someone to play chess with.",
+      constraints: { maxGroup: 2 },
+    });
+    const negotiation = await service.start(a, quest.id);
+    const { conversation } = await service.load(negotiation.id);
+
+    expect(conversation.participants).toEqual([a, specialist]);
+    expect(model.inputs).toHaveLength(0);
+  } finally {
+    for (const memory of memories)
+      await f.db.delete(s.userMemories).where(eq(s.userMemories.id, memory.id));
+  }
+});
