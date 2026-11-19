@@ -131,6 +131,23 @@ it("executes independently addressed turns and counteroffers through LangGraph",
       .where(eq(s.approvals.proposalId, result.activeProposalId!)),
   ).toHaveLength(0);
 });
+it("uses the validated proposal slot even when Scout supplies a different time", async () => {
+  model.replies.push(
+    action("PROPOSE", b, "How about the indie lounge?", {
+      plan: {
+        ...plan,
+        end: new Date(+new Date(plan.end) + 86_400_000).toISOString(),
+      },
+    }),
+  );
+
+  expect(await service.tick(n.id)).toBe(true);
+  const [proposal] = await f.db
+    .select()
+    .from(s.proposals)
+    .where(eq(s.proposals.negotiationId, n.id));
+  expect(proposal?.plan).toEqual(plan);
+});
 it("requires all humans to approve identical version/hash", async () => {
   const input = await agree();
   expect((await service.load(n.id)).n.status).toBe("AWAITING_APPROVAL");
