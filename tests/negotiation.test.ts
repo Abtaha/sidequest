@@ -278,9 +278,51 @@ it("contains injected agent data and rejects injected unauthorized actions", asy
   );
   const result = await service.run(a, n.id);
   expect(result.status).toBe("FAILED");
-  expect(result.failure).toContain("Unauthorized recipient");
+  expect(result.failure).toBe("MODEL_OR_CONTEXT_FAILURE");
   expect(JSON.stringify(model.inputs[0]!.data)).toContain("Ignore the system");
   expect(model.inputs[0]!.task).toContain("independent Scout");
+});
+it("routes a one-to-one turn to its only authorized peer", async () => {
+  const quest = await service.create(a, {
+    requestId: randomUUID(),
+    intent: "Find a board game meetup.",
+    constraints: {},
+  });
+  const negotiation = await service.start(a, quest.id, [b]);
+  model.replies.push(
+    action("INQUIRY", "invented-scout-id", "Would you enjoy board games?"),
+    action("END", null, "No further replies."),
+  );
+
+  await service.run(a, negotiation.id);
+  const messages = await f.db
+    .select()
+    .from(s.agentMessages)
+    .where(eq(s.agentMessages.conversationId, negotiation.conversationId));
+  expect(messages).toHaveLength(1);
+  expect(messages[0]).toMatchObject({ senderId: a, recipientId: b });
+});
+it("routes a group reply with no recipient to the Scout who asked", async () => {
+  const state = (await service.load(n.id)).n;
+  await service.execute(n.id, {
+    actor: c,
+    action: action("INQUIRY", b, "Would board games suit you?"),
+    turn: state.turn,
+  });
+  model.replies.push(
+    action("INFORM", null, "Yes, board games suit me."),
+    action("END", null, "Stop after the reply."),
+  );
+
+  await service.run(a, n.id);
+  const messages = await f.db
+    .select()
+    .from(s.agentMessages)
+    .where(eq(s.agentMessages.conversationId, n.conversationId));
+  expect(messages.find((message) => message.type === "INFORM")).toMatchObject({
+    senderId: b,
+    recipientId: c,
+  });
 });
 it("terminates a repeated-message loop", async () => {
   await apply(a, action("INQUIRY", b, "Same question"));
