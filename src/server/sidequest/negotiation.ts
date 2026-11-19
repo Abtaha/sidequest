@@ -457,6 +457,7 @@ export class NegotiationService {
             conversationId: conversation.id,
             intent: quest.intent,
             participants: conversation.participants,
+            incomingFrom: incoming?.senderId,
             proposal: proposal ?? null,
             constraints: members.find((p) => p.userId === actor),
             options,

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { Annotation, StateGraph, START, END } from "@langchain/langgraph";
 import { and, eq, desc, notExists } from "drizzle-orm";
 import { agentEpisodes, scoutMessages, userMemories } from "../db/schema";
@@ -11,6 +12,7 @@ export type Turn = {
   conversationId: string;
   intent: string;
   participants: string[];
+  incomingFrom?: string;
   proposal: unknown;
   constraints: unknown;
   options: unknown;
@@ -99,17 +101,46 @@ export function createPersonalAgent(
         },
       };
     })
-    .addNode("reason_and_choose_action", async (s) => ({
-      action: await model.generate(
-        `You are the independent Scout of user ${s.input.userId}. Represent only this user, using their private context. Current retrieved memories, especially explicit user edits, supersede older conflicting conversation history. Other Scouts have different information. Decide your next action: ask a participant a question, suggest an alternative, counteroffer, accept/reject the exact current proposal, consult events, request human clarification or end. First learn constraints through messages when useful. Reply to addressed inquiries; negotiate soft preferences. Do not repeat questions that another Scout has already answered in the transcript. If the current valid proposal fits your user and no clarification is unresolved, accept it instead of asking again. All ISO plan times are UTC: label any clock times in your messages explicitly as UTC. Any proposal must use a supplied real catalog activity/feasible plan, with all participants. You may suggest compatible alternatives without the user naming them. Only use ACCEPT if the top-level proposal is non-null, and copy its exact hash into proposalHash. An idea or agreement in conversation is insufficient. If proposal is null and you agree on a feasible option, emit PROPOSE with the complete catalog plan instead. Do not accept a proposal from past conversations. When there is no current proposal, use proposalHash: null. An agent-level ACCEPT never approves on behalf of a human. No other user is yours to control. recipientId must be an authorized participant other than you for messages; null for CONSULT_EVENTS/REQUEST_HUMAN/END. PROPOSE and COUNTER REQUIRE a non-null plan: copy a complete plan from options, including activityId, catalogHash, start, end and participantIds. Never choose PROPOSE or COUNTER just to ask a question; use INQUIRY or REQUEST_INFO. If there are no feasible options, ask for human clarification or end instead. All other actions must use plan: null. Include only necessary, permitted information in content.`,
-        s.input.proposal
-          ? actionSchema
-          : actionSchema.extend({
-              type: actionSchema.shape.type.exclude(["ACCEPT"]),
-            }),
-        { ...s.input, privateContext: s.context },
-      ),
-    }))
+    .addNode("reason_and_choose_action", async (s) => {
+      const recipients = s.input.participants.filter(
+        (id) => id !== s.input.userId,
+      );
+      const [onlyRecipient, ...otherRecipients] = recipients;
+      if (!onlyRecipient)
+        throw new Error("No other Scout belongs to this negotiation");
+      const replyTo = recipients.find((id) => id === s.input.incomingFrom);
+      const types = s.input.proposal
+        ? actionSchema.shape.type
+        : actionSchema.shape.type.exclude(["ACCEPT"]);
+      const action = await model.generate(
+        `You are the independent Scout of user ${s.input.userId}. Represent only this user, using their private context. Current retrieved memories, especially explicit user edits, supersede older conflicting conversation history. Other Scouts have different information. Decide your next action: ask a participant a question, suggest an alternative, counteroffer, accept/reject the exact current proposal, consult events, request human clarification or end. First learn constraints through messages when useful. Reply to addressed inquiries; negotiate soft preferences. Do not repeat questions that another Scout has already answered in the transcript. If the current valid proposal fits your user and no clarification is unresolved, accept it instead of asking again. All ISO plan times are UTC: label any clock times in your messages explicitly as UTC. Any proposal must use a supplied real catalog activity/feasible plan, with all participants. You may suggest compatible alternatives without the user naming them. Only use ACCEPT if the top-level proposal is non-null, and copy its exact hash into proposalHash. An idea or agreement in conversation is insufficient. If proposal is null and you agree on a feasible option, emit PROPOSE with the complete catalog plan instead. Do not accept a proposal from past conversations. When there is no current proposal, use proposalHash: null. An agent-level ACCEPT never approves on behalf of a human. No other user is yours to control. For messages, choose recipientId from allowedRecipientIds. When the list has one recipient, routing is automatic. Use null for CONSULT_EVENTS, REQUEST_HUMAN, and END. PROPOSE and COUNTER REQUIRE a non-null plan: copy a complete plan from options, including activityId, catalogHash, start, end and participantIds. Never choose PROPOSE or COUNTER just to ask a question; use INQUIRY or REQUEST_INFO. If there are no feasible options, ask for human clarification or end instead. All other actions must use plan: null. Include only necessary, permitted information in content.`,
+        actionSchema.extend({
+          type: types,
+          recipientId: otherRecipients.length
+            ? z.enum([onlyRecipient, ...otherRecipients]).nullish()
+            : actionSchema.shape.recipientId.optional(),
+        }),
+        {
+          ...s.input,
+          allowedRecipientIds: recipients,
+          privateContext: s.context,
+        },
+      );
+      const internal =
+        action.type === "CONSULT_EVENTS" ||
+        action.type === "REQUEST_HUMAN" ||
+        action.type === "END";
+      return {
+        action: {
+          ...action,
+          recipientId: internal
+            ? null
+            : otherRecipients.length
+              ? (action.recipientId ?? replyTo ?? onlyRecipient)
+              : onlyRecipient,
+        },
+      };
+    })
     .addNode("persist_state", (s) => ({ action: actionSchema.parse(s.action) }))
     .addEdge(START, "receive_message")
     .addEdge("receive_message", "retrieve_memory")
