@@ -92,7 +92,6 @@ export default function SideQuestApp({
   const retry = React.useRef<{ signature: string; requestId: string } | null>(
     null,
   );
-  const notificationBaseline = React.useRef(false);
   const notificationToastTimer = React.useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
@@ -142,11 +141,12 @@ export default function SideQuestApp({
     }
 
     const currentIds = notifications.map((notification) => notification.id);
+    const hasStoredHistory = window.localStorage.getItem(storageKey) !== null;
 
-    // The first successful load establishes the baseline. Existing notifications
-    // should never trigger a toast just because the user opened the app.
-    if (!notificationBaseline.current) {
-      notificationBaseline.current = true;
+    // On the very first visit, establish a baseline so existing notifications
+    // do not look new. If the user has visited before, unseen IDs are new even
+    // when they arrived while the user was away.
+    if (!hasStoredHistory) {
       try {
         window.localStorage.setItem(storageKey, JSON.stringify(currentIds));
       } catch {
