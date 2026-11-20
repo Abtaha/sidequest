@@ -83,10 +83,19 @@ export default function SideQuestApp({
       string | null
     >(null),
     [showNotifications, setShowNotifications] = React.useState(false),
-    [showSettings, setShowSettings] = React.useState(false);
+    [showSettings, setShowSettings] = React.useState(false),
+    [newNotification, setNewNotification] = React.useState<{
+      id: string;
+      title: string;
+      status: string;
+    } | null>(null);
   const retry = React.useRef<{ signature: string; requestId: string } | null>(
     null,
   );
+  const notificationBaseline = React.useRef(false);
+  const notificationToastTimer = React.useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
   const activities = (catalog.data ?? []).map(catalogActivity);
   const people: (Person & { id: string })[] = (peopleQuery.data ?? []).map(
     (person) => ({
@@ -114,6 +123,71 @@ export default function SideQuestApp({
         ]
       : [],
   );
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !notifications.length) return;
+
+    const storageKey = `sidequest:seen-notifications:${userId}`;
+    let seen = new Set<string>();
+
+    try {
+      const stored = window.localStorage.getItem(storageKey);
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          seen = new Set(parsed.filter((id): id is string => typeof id === "string"));
+        }
+      }
+    } catch {
+      // If storage is unavailable, keep the detection in memory for this session.
+    }
+
+    const currentIds = notifications.map((notification) => notification.id);
+
+    // The first successful load establishes the baseline. Existing notifications
+    // should never trigger a toast just because the user opened the app.
+    if (!notificationBaseline.current) {
+      notificationBaseline.current = true;
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify(currentIds));
+      } catch {
+        // Continue without persistence if localStorage is unavailable.
+      }
+      return;
+    }
+
+    const newlyReceived = notifications.filter(
+      (notification) => !seen.has(notification.id),
+    );
+    if (!newlyReceived.length) return;
+
+    const nextSeen = new Set([...seen, ...currentIds]);
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify([...nextSeen]));
+    } catch {
+      // Keep the current-session detection working even if persistence fails.
+    }
+
+    const notification = newlyReceived[newlyReceived.length - 1];
+    setNewNotification(notification);
+
+    if (notificationToastTimer.current) {
+      clearTimeout(notificationToastTimer.current);
+    }
+    notificationToastTimer.current = setTimeout(() => {
+      setNewNotification(null);
+      notificationToastTimer.current = null;
+    }, 5000);
+  }, [notifications, userId]);
+
+  React.useEffect(
+    () => () => {
+      if (notificationToastTimer.current) {
+        clearTimeout(notificationToastTimer.current);
+      }
+    },
+    [],
+  );
+
   const confirmed = (quests.data ?? []).flatMap((row) => {
     if (row.negotiation?.status !== "CONFIRMED" || !row.proposal) return [];
     const p = row.proposal;
@@ -141,6 +215,11 @@ export default function SideQuestApp({
     setSelected(null);
     setShowNotifications(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  function openNotification(id: string) {
+    setSelectedNegotiation(id);
+    setNewNotification(null);
+    setShowNotifications(false);
   }
   function run(id: string) {
     setError("");
@@ -191,10 +270,7 @@ export default function SideQuestApp({
           showNotifications={showNotifications}
           onSettings={() => setShowSettings(true)}
           notifications={notifications}
-          onNotification={(id) => {
-            setSelectedNegotiation(id);
-            setShowNotifications(false);
-          }}
+          onNotification={openNotification}
         />
         {(error || queryError) && (
           <div
@@ -302,6 +378,24 @@ export default function SideQuestApp({
         )}
       </main>
       <MobileNav active={activeView} onNavigate={navigate} />
+      {newNotification && (
+        <button
+          type="button"
+          aria-label={`Open new notification: ${newNotification.title}`}
+          onClick={() => openNotification(newNotification.id)}
+          className="fixed inset-x-4 bottom-20 z-50 mx-auto w-[min(24rem,calc(100vw-2rem))] rounded-2xl border border-[#dfe2da] bg-white px-4 py-3 text-left shadow-2xl shadow-black/15 transition hover:-translate-y-0.5 lg:bottom-6"
+        >
+          <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#7f8b82]">
+            New notification
+          </p>
+          <p className="mt-1 text-sm font-semibold text-[#202a24]">
+            {newNotification.title}
+          </p>
+          <p className="mt-1 text-xs text-[#737d76]">
+            Click to review
+          </p>
+        </button>
+      )}
       {selected && (
         <ActivityDetails
           activity={selected}
