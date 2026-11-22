@@ -1,5 +1,6 @@
 import { Mailbox } from "./mailbox";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { and, eq, inArray, desc, asc, gt, gte, isNull, or } from "drizzle-orm";
 import {
   Annotation,
@@ -27,7 +28,7 @@ import {
   type Participant,
 } from "./constraints";
 import { EventAgent } from "./events";
-import { rankCandidatesByInterest } from "./discovery";
+import { rankCandidatesByInterest, requestedGroupSize } from "./discovery";
 export const defaultLimits = {
   messages: 20,
   rounds: 3,
@@ -130,9 +131,14 @@ export class NegotiationService {
     userId: string,
     input: { requestId: string; intent: string; constraints: Constraints },
   ) {
+    const constraints =
+      input.constraints.minGroup === undefined &&
+      input.constraints.maxGroup === undefined
+        ? { ...input.constraints, ...requestedGroupSize(input.intent) }
+        : input.constraints;
     const [quest] = await this.db
       .insert(s.sidequests)
-      .values({ ownerId: userId, ...input })
+      .values({ ownerId: userId, ...input, constraints })
       .onConflictDoNothing()
       .returning();
     if (quest) return quest;
@@ -147,7 +153,8 @@ export class NegotiationService {
       );
     if (
       prior?.intent !== input.intent ||
-      JSON.stringify(prior.constraints) !== JSON.stringify(input.constraints)
+      (!isDeepStrictEqual(prior.constraints, constraints) &&
+        !isDeepStrictEqual(prior.constraints, input.constraints))
     )
       throw new DomainError(
         "CONFLICT",
@@ -302,7 +309,9 @@ export class NegotiationService {
         if (ids.length === 1) {
           throw new DomainError(
             "PRECONDITION_FAILED",
-            "No one in your planning circle has a compatible upcoming activity. Try a different time or ask a specific person from People.",
+            minGroup > 2
+              ? `No group of at least ${minGroup} people in your planning circle has a compatible upcoming activity. Try a different time.`
+              : "No one in your planning circle has a compatible upcoming activity. Try a different time or ask a specific person from People.",
           );
         }
       }

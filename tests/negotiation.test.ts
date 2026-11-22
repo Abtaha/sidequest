@@ -928,6 +928,42 @@ it("shortlists relevant interests before negotiating and skips expired interests
   }
 });
 
+it("preserves explicit group size when Scout summarizes a planning request", async () => {
+  const scout = new ScoutService(
+    f.db,
+    model,
+    new MemoryService(f.db, model),
+    service,
+  );
+  model.replies.push(
+    { memories: [] },
+    {
+      content: "I’ll look for a game.",
+      planningIntent: "Find a board game meetup",
+    },
+  );
+  const chat = await scout.send(a, {
+    requestId: randomUUID(),
+    content: "Find a board game meetup with two other people.",
+  });
+  const planned = await service.start(a, chat.planningQuestId!);
+  const { quest, conversation } = await service.load(planned.id);
+  expect(quest.constraints).toEqual({ minGroup: 3, maxGroup: 3 });
+  expect(conversation.participants).toHaveLength(3);
+
+  const input = {
+    requestId: randomUUID(),
+    intent: "Plan for a group of 3.",
+    constraints: { maxCost: 15000 },
+  };
+  const first = await service.create(a, input);
+  expect(first.constraints).toEqual({
+    maxCost: 15000,
+    minGroup: 3,
+    maxGroup: 3,
+  });
+  expect((await service.create(a, input)).id).toBe(first.id);
+});
 it("grounds Scout chat in the user's own and shared plans without including outsiders' plans", async () => {
   const original = await agree();
   for (const person of [a, b, c])

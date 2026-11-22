@@ -16,6 +16,7 @@ import { type MemoryService } from "./memory";
 import { type NegotiationService } from "./negotiation";
 import { DomainError, relativeTimeChange } from "./types";
 import { currentPlansForChat } from "./plan-context";
+import { requestedGroupSize } from "./discovery";
 export class ScoutService {
   constructor(
     private db: Database,
@@ -314,7 +315,7 @@ export class ScoutService {
               ownerId: userId,
               requestId: source.id,
               intent: reply.planningIntent,
-              constraints: {},
+              constraints: requestedGroupSize(input.content) ?? {},
             })
             .onConflictDoNothing();
         }
