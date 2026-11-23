@@ -81,10 +81,15 @@ export interface DiscoverProps {
   onSelect: (activity: Activity) => void;
 }
 export interface PlansProps {
-  plans: Activity[];
-  negotiations: { id: string; title: string; status: string }[];
+  plans: (Activity & { startAt: number })[];
+  negotiations: {
+    id: string;
+    title: string;
+    status: string;
+    failure: string | null;
+    hasProposal: boolean;
+  }[];
   onNegotiation: (id: string) => void;
-  onSelect: (activity: Activity) => void;
   onDiscover: () => void;
 }
 export interface PeopleProps {

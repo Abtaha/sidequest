@@ -185,6 +185,7 @@ export default function SideQuestApp({
         title: p.activitySnapshot.title,
         image: activityImage("Games"),
         match: 0,
+        startAt: new Date(p.plan.start).getTime(),
         people: p.plan.participantIds
           .filter((id) => id !== userId)
           .map(() => "Participant"),
@@ -339,21 +340,22 @@ export default function SideQuestApp({
         {activeView === "Plans" && (
           <PlansView
             plans={confirmed}
-            negotiations={(quests.data ?? []).flatMap((row) =>
-              row.negotiation && row.negotiation.status !== "CONFIRMED"
-                ? [
-                    {
-                      id: row.negotiation.id,
-                      title:
-                        row.proposal?.activitySnapshot.title ??
-                        row.sidequest.intent,
-                      status: row.negotiation.status,
-                    },
-                  ]
-                : [],
+            negotiations={(quests.data ?? []).flatMap(
+              ({ negotiation, proposal, sidequest }) => {
+                if (!negotiation || negotiation.status === "CONFIRMED")
+                  return [];
+                return [
+                  {
+                    id: negotiation.id,
+                    title: proposal?.activitySnapshot.title ?? sidequest.intent,
+                    status: negotiation.status,
+                    failure: negotiation.failure,
+                    hasProposal: proposal !== null,
+                  },
+                ];
+              },
             )}
             onNegotiation={setSelectedNegotiation}
-            onSelect={(activity) => setSelectedNegotiation(activity.id)}
             onDiscover={() => navigate("Discover")}
           />
         )}

@@ -117,7 +117,7 @@ test("participants approve independently, revise and decline while another accou
       .first()
       .click();
     await expect(
-      outsiderPage.getByText("Your calendar is wide open", { exact: true }),
+      outsiderPage.getByText("No upcoming plans yet.", { exact: true }),
     ).toBeVisible();
     const outsiderDetail = await outsiderContext.request.get(
       query("sidequest.getNegotiation", { id: n.id }),
@@ -143,10 +143,12 @@ test("participants approve independently, revise and decline while another accou
         .getByRole("button", { name: "Plans", exact: true })
         .first()
         .click();
-      await page
+      const proposalRow = page
+        .getByRole("region", { name: "Awaiting Approval" })
         .getByRole("button")
-        .filter({ hasText: option.activity.title })
-        .click();
+        .filter({ hasText: option.activity.title });
+      await expect(proposalRow.getByText("Awaiting approvals")).toBeVisible();
+      await proposalRow.click();
       await expect(
         page.getByRole("button", { name: "Approve proposal v1", exact: true }),
       ).toBeVisible();
@@ -177,10 +179,26 @@ test("participants approve independently, revise and decline while another accou
       ).toBeVisible();
     await pageA.keyboard.press("Escape");
     const confirmed = pageA
+      .getByRole("region", { name: "Upcoming Plans" })
       .getByRole("button")
       .filter({ hasText: "Confirmed by everyone" });
     await expect(confirmed).toBeVisible();
+    await expect(
+      confirmed.getByText("3 participants", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      pageA
+        .getByRole("region", { name: "Awaiting Approval" })
+        .getByRole("button"),
+    ).toHaveCount(0);
     await confirmed.click();
+    const details = pageA.getByRole("dialog");
+    await expect(
+      details.getByText(/With .*Synthetic Approval Tester 2/),
+    ).toBeVisible();
+    await expect(
+      details.getByText("Confirmed by every participant.", { exact: true }),
+    ).toBeVisible();
     const start = new Date(+new Date(initial.start) + 3_600_000).toISOString(),
       end = new Date(+new Date(initial.end) + 3_600_000).toISOString();
     await service.revise(a, {
@@ -231,6 +249,17 @@ test("participants approve independently, revise and decline while another accou
         page.getByText("Confirmed by every participant.", { exact: true }),
       ).toHaveCount(0);
     }
+    await pageA.keyboard.press("Escape");
+    await expect(confirmed).toHaveCount(0);
+    const revisedRow = pageA
+      .getByRole("region", { name: "Awaiting Approval" })
+      .getByRole("button")
+      .filter({ hasText: option.activity.title });
+    await expect(revisedRow).toBeVisible();
+    await revisedRow.click();
+    await expect(
+      pageA.getByRole("button", { name: "Approve proposal v2" }),
+    ).toBeVisible();
     const staleApproval = await secondContext.request.post(
       "/api/trpc/sidequest.approveProposal",
       {
@@ -250,6 +279,28 @@ test("participants approve independently, revise and decline while another accou
         page.getByRole("button", { name: "Approve proposal v2" }),
       ).toHaveCount(0);
     }
+    await pageA.keyboard.press("Escape");
+    await expect(confirmed).toHaveCount(0);
+    await expect(
+      pageA
+        .getByRole("region", { name: "Awaiting Approval" })
+        .getByRole("button"),
+    ).toHaveCount(0);
+    await expect(
+      pageA.getByText("A participant declined the proposal."),
+    ).toHaveCount(0);
+    await pageA
+      .getByRole("button", { name: "View Failed & Declined Plans" })
+      .click();
+    const declined = pageA
+      .getByRole("button")
+      .filter({ hasText: option.activity.title });
+    await expect(declined.getByText("Declined", { exact: true })).toBeVisible();
+    await expect(
+      declined.getByText("A participant declined the proposal."),
+    ).toBeVisible();
+    await pageA.getByRole("button", { name: "Back to Plans" }).click();
+    await expect(declined).toHaveCount(0);
     expect(browserErrors).toEqual([]);
   } finally {
     await firstContext.close();
