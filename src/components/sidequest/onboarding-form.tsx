@@ -97,7 +97,9 @@ function SelectField({
 export default function OnboardingForm({ name }: { name: string }) {
   const router = useRouter(),
     [step, setStep] = React.useState(1),
-    [error, setError] = React.useState("");
+    [error, setError] = React.useState(""),
+    [matchingEnabled, setMatchingEnabled] = React.useState(true),
+    [openDiscovery, setOpenDiscovery] = React.useState(true);
   const requestId = React.useRef<string>(crypto.randomUUID());
   const save = api.profile.onboard.useMutation();
   return (
@@ -130,8 +132,8 @@ export default function OnboardingForm({ name }: { name: string }) {
             socialStyle: formText(data, "socialStyle", "No preference"),
             budget: formText(data, "budget", "Flexible"),
             windows,
-            optIn: data.get("optIn") === "on",
-            openDiscovery: data.get("optIn") === "on",
+            optIn: matchingEnabled,
+            openDiscovery,
           });
           router.push("/onboarding/personalize");
         } catch (error) {
@@ -223,9 +225,25 @@ export default function OnboardingForm({ name }: { name: string }) {
             can edit exact dates in Settings.
           </p>
           <label className="mt-5 flex gap-3 text-sm">
-            <input type="checkbox" name="optIn" /> Let Scout match me with
-            people across SideQuest who also opt in and share the planning
-            details needed to find a plan.
+            <input
+              type="checkbox"
+              checked={matchingEnabled}
+              onChange={(event) => setMatchingEnabled(event.target.checked)}
+            />
+            Let Scout match me and share the details needed to make a plan.
+          </label>
+          <label className="mt-3 flex gap-3 text-sm">
+            <input
+              type="checkbox"
+              checked={openDiscovery}
+              onChange={(event) => setOpenDiscovery(event.target.checked)}
+            />
+            <span>
+              Match with people across SideQuest
+              <span className="mt-1 block text-xs text-[#627067]">
+                Turn this off to match within your planning circle.
+              </span>
+            </span>
           </label>
         </>
       )}

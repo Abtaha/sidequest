@@ -155,6 +155,7 @@ it("persists onboarding choices, source messages and dated availability idempote
   const profile = await api.profile.get();
   expect(profile.profile?.sharing).toBe(true);
   expect(profile.profile?.discoverable).toBe(true);
+  expect(profile.profile?.openDiscovery).toBe(true);
   expect(
     await f.db.select().from(userMemories).where(eq(userMemories.userId, id)),
   ).toHaveLength(4);
@@ -165,6 +166,18 @@ it("persists onboarding choices, source messages and dated availability idempote
     await f.db.select().from(scoutMessages).where(eq(scoutMessages.userId, id)),
   ).toHaveLength(1);
   expect(profile.profile?.constraints.maxCost).toBeUndefined();
+  await api.profile.onboard({
+    ...input,
+    requestId: randomUUID(),
+    openDiscovery: false,
+  });
+  expect((await api.profile.get()).profile).toMatchObject({
+    discoverable: true,
+    sharing: true,
+    openDiscovery: false,
+  });
+  await api.profile.onboard({ ...input, requestId: randomUUID() });
+  expect((await api.profile.get()).profile?.openDiscovery).toBe(false);
 });
 it("exposes only permitted public people and strips private negotiation state from lists", async () => {
   const api = caller(syntheticIds[0]);

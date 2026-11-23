@@ -186,17 +186,14 @@ export const profileRouter = createTRPCRouter({
             userId,
             discoverable: input.optIn,
             sharing: input.optIn,
-            openDiscovery: input.optIn && input.openDiscovery === true,
+            openDiscovery: input.openDiscovery,
           })
           .onConflictDoUpdate({
             target: s.profiles.userId,
             set: {
               discoverable: input.optIn,
               sharing: input.optIn,
-              openDiscovery:
-                input.openDiscovery === undefined
-                  ? undefined
-                  : input.optIn && input.openDiscovery,
+              openDiscovery: input.openDiscovery,
               updatedAt: new Date(),
             },
           });
