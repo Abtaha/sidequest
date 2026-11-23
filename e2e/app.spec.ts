@@ -18,7 +18,10 @@ test("real authentication, onboarding, saved memories, discovery and session rec
   await page.getByLabel("Ideal group size").selectOption("Small groups");
   await page.getByLabel("Usual budget").selectOption("Under ₩10,000");
   await page.getByText("Weekends", { exact: true }).click();
-  await page.locator('input[name="optIn"]').check();
+  await expect(page.getByLabel(/Let Scout match me/)).toBeChecked();
+  await expect(
+    page.getByLabel(/Match with people across SideQuest/),
+  ).toBeChecked();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page).toHaveURL(/\/onboarding\/personalize$/);
   await page.getByRole("button", { name: "Meet my Scout" }).click();
@@ -60,6 +63,9 @@ test("real authentication, onboarding, saved memories, discovery and session rec
     }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const openDiscovery = page.getByLabel(/Match with people across SideQuest/);
+  await expect(openDiscovery).toBeChecked();
+  await openDiscovery.uncheck();
   await page
     .getByLabel("Planning circle", { exact: true })
     .fill("synthetic-campus");
@@ -111,6 +117,7 @@ test("real authentication, onboarding, saved memories, discovery and session rec
   await expect(page.getByLabel("Planning circle", { exact: true })).toHaveValue(
     "synthetic-campus",
   );
+  await expect(openDiscovery).not.toBeChecked();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,

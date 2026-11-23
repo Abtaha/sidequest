@@ -138,7 +138,7 @@ function SettingsForm({
           onChange={(event) => setOpenDiscovery(event.target.checked)}
         />{" "}
         <span>
-          Match with people across SideQuest who also opt in
+          Match with people across SideQuest
           <span className="mt-1 block text-xs text-slate-600">
             Turn this off to match within your planning circle.
           </span>

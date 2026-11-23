@@ -48,7 +48,7 @@ export const negotiationStatus = pgEnum("sq_negotiation_status", [
 export const profiles = pgTable("sq_profiles", {
   userId: owner().primaryKey(),
   discoverable: boolean().default(false).notNull(),
-  openDiscovery: boolean("open_discovery").default(false).notNull(),
+  openDiscovery: boolean("open_discovery").default(true).notNull(),
   circle: text().default("campus").notNull(),
   blockedUsers: jsonb().$type<string[]>().default([]).notNull(),
   sharing: boolean().default(false).notNull(),

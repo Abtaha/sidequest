@@ -45,6 +45,7 @@ export async function seed(db: Database, date = new Date()) {
           userId,
           sharing: true,
           discoverable: true,
+          openDiscovery: false,
           circle: "synthetic-campus",
           constraints: { maxCost: budgets[i], maxGroup: i === 7 ? 2 : 5 },
         })

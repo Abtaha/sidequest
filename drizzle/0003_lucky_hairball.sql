@@ -1,0 +1,1 @@
+ALTER TABLE "sq_profiles" ALTER COLUMN "open_discovery" SET DEFAULT true;
