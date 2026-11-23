@@ -131,6 +131,7 @@ export default function OnboardingForm({ name }: { name: string }) {
             budget: formText(data, "budget", "Flexible"),
             windows,
             optIn: data.get("optIn") === "on",
+            openDiscovery: data.get("optIn") === "on",
           });
           router.push("/onboarding/personalize");
         } catch (error) {
@@ -222,9 +223,9 @@ export default function OnboardingForm({ name }: { name: string }) {
             can edit exact dates in Settings.
           </p>
           <label className="mt-5 flex gap-3 text-sm">
-            <input type="checkbox" name="optIn" /> Allow Scout to discover
-            people in my campus circle and share the necessary planning
-            constraints with their Scouts.
+            <input type="checkbox" name="optIn" /> Let Scout match me with
+            people across SideQuest who also opt in and share the planning
+            details needed to find a plan.
           </label>
         </>
       )}

@@ -10,7 +10,7 @@ export function PeopleView({ invited, onInvite, people, busy }: PeopleProps) {
   return (
     <div className="mx-auto max-w-[1100px] px-5 py-8 md:px-9 md:py-10">
       <PageHeading
-        eyebrow="Your circle"
+        eyebrow="Discover people"
         title="People open to a SideQuest"
         copy="Availability is shared at a high level. Scout never reveals private calendar details or personal notes."
       />
@@ -36,7 +36,7 @@ export function PeopleView({ invited, onInvite, people, busy }: PeopleProps) {
         )}
         {people.map((s) => (
           <article
-            key={s.name}
+            key={s.id}
             className="rounded-[22px] border border-[#dfe2da] bg-white p-5"
           >
             <div className="flex items-start gap-4">

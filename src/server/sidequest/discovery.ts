@@ -1,3 +1,16 @@
+import { eq, or } from "drizzle-orm";
+import { profiles } from "../db/schema";
+
+export function discoveryScope(profile: {
+  circle: string;
+  openDiscovery: boolean;
+}) {
+  const sameCircle = eq(profiles.circle, profile.circle);
+  return profile.openDiscovery
+    ? or(sameCircle, eq(profiles.openDiscovery, true))
+    : sameCircle;
+}
+
 const genericWords = new Set(
   [
     "about activity activities after also and another are can check choose coordinate",

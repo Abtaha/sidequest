@@ -28,7 +28,11 @@ import {
   type Participant,
 } from "./constraints";
 import { EventAgent } from "./events";
-import { rankCandidatesByInterest, requestedGroupSize } from "./discovery";
+import {
+  discoveryScope,
+  rankCandidatesByInterest,
+  requestedGroupSize,
+} from "./discovery";
 export const defaultLimits = {
   messages: 20,
   rounds: 3,
@@ -199,13 +203,12 @@ export class NegotiationService {
           .from(s.profiles)
           .where(
             and(
-              eq(s.profiles.circle, own.circle),
+              discoveryScope(own),
               eq(s.profiles.discoverable, true),
               eq(s.profiles.sharing, true),
             ),
           )
-          .orderBy(asc(s.profiles.userId))
-          .limit(100);
+          .orderBy(asc(s.profiles.userId));
         const members = await this.participants(
           [
             ...new Set([
@@ -267,7 +270,16 @@ export class NegotiationService {
         );
         const eventAgent = new EventAgent(tx, this.model);
         const catalog = await eventAgent.catalog(quest.constraints);
-        for (const pool of relevant.length ? [relevant, ranked] : [ranked]) {
+        const candidatePools = relevant.length ? [relevant, ranked] : [ranked];
+        if (
+          own.openDiscovery &&
+          ranked.some(({ candidate }) => !candidate.openDiscovery)
+        ) {
+          candidatePools.push(
+            ranked.filter(({ candidate }) => candidate.openDiscovery),
+          );
+        }
+        for (const pool of candidatePools) {
           const group = [owner];
           for (const { candidate } of pool) {
             if (group.length >= maxGroup) break;
@@ -310,8 +322,8 @@ export class NegotiationService {
           throw new DomainError(
             "PRECONDITION_FAILED",
             minGroup > 2
-              ? `No group of at least ${minGroup} people in your planning circle has a compatible upcoming activity. Try a different time.`
-              : "No one in your planning circle has a compatible upcoming activity. Try a different time or ask a specific person from People.",
+              ? `No eligible group of at least ${minGroup} people has a compatible upcoming activity. Try a different time.`
+              : "No eligible match has a compatible upcoming activity. Try a different time or check discovery in Settings.",
           );
         }
       }
