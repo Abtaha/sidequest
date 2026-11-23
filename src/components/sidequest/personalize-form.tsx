@@ -51,7 +51,7 @@ export default function PersonalizeForm() {
         {"Make Scout yours"}
       </p>
       <h1 className="mt-3 text-4xl font-semibold tracking-[-0.045em] text-[#17211b] sm:text-5xl">
-        {"Tell Scout anything."}
+        {"Tell Scout about your interests and preferences"}
       </h1>
       <p className="mt-4 max-w-xl text-[15px] leading-6 text-[#6c776f]">
         {

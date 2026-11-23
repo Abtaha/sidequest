@@ -16,7 +16,7 @@ test("real authentication, onboarding, saved memories, discovery and session rec
   await page.getByText("Music & nightlife", { exact: true }).click();
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await page.getByLabel("Ideal group size").selectOption("Small groups");
-  await page.getByLabel("Usual budget").selectOption("Under ₩10,000");
+  await page.getByLabel("Personal Budget").selectOption("Under ₩10,000");
   await page.getByText("Weekends", { exact: true }).click();
   await page.locator('input[name="optIn"]').check();
   await page.getByRole("button", { name: "Continue", exact: true }).click();

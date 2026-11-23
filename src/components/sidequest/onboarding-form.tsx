@@ -199,7 +199,7 @@ export default function OnboardingForm({ name }: { name: string }) {
             ]}
           />
           <SelectField
-            label="Usual budget"
+            label="Personal Budget"
             name="budget"
             options={["Free", "Under ₩10,000", "Under ₩25,000", "Flexible"]}
           />
