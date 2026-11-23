@@ -81,7 +81,7 @@ export interface DiscoverProps {
   onSelect: (activity: Activity) => void;
 }
 export interface PlansProps {
-  plans: (Activity & { startAt: number; participantNames: string[] })[];
+  plans: (Activity & { startAt: number })[];
   negotiations: {
     id: string;
     title: string;

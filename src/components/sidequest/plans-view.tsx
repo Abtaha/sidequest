@@ -145,19 +145,10 @@ export function PlansView({
                         <Icon name="pin" className="h-4 w-4" />
                         {e.location}
                       </p>
-                      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-[#667169]">
-                        <div className="flex -space-x-2">
-                          {e.participantNames.slice(0, 3).map((e, s) => (
-                            <span
-                              key={`${e}-${s}`}
-                              className={`grid h-7 w-7 place-items-center rounded-full border-2 border-white text-[9px] font-bold ${["bg-[#d8c4b6]", "bg-[#c5d6c1]", "bg-[#c4cee0]"][s]}`}
-                            >
-                              {e[0]}
-                            </span>
-                          ))}
-                        </div>
-                        <span>{e.participantNames.join(", ")}</span>
-                      </div>
+                      <p className="mt-4 text-xs text-[#667169]">
+                        {e.people.length + 1}{" "}
+                        {e.people.length ? "participants" : "participant"}
+                      </p>
                     </div>
                     <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#f0f2ec] text-[#244a36] transition group-hover:bg-[#244a36] group-hover:text-white">
                       <Icon name="chevron" className="h-4 w-4" />

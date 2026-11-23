@@ -186,7 +186,6 @@ export default function SideQuestApp({
         image: activityImage("Games"),
         match: 0,
         startAt: new Date(p.plan.start).getTime(),
-        participantNames: row.participantNames,
         people: p.plan.participantIds
           .filter((id) => id !== userId)
           .map(() => "Participant"),

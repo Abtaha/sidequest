@@ -392,33 +392,9 @@ export const sidequestRouter = createTRPCRouter({
       )
       .orderBy(desc(s.sidequests.createdAt))
       .limit(100);
-    const participantIds = [
-      ...new Set(
-        rows.flatMap(({ negotiation, proposal }) =>
-          negotiation?.status === "CONFIRMED" &&
-          proposal?.plan.participantIds.includes(ctx.session.user.id)
-            ? proposal.plan.participantIds
-            : [],
-        ),
-      ),
-    ];
-    const participants = participantIds.length
-      ? await ctx.db
-          .select({ id: s.user.id, name: s.user.name })
-          .from(s.user)
-          .where(inArray(s.user.id, participantIds))
-      : [];
-    const names = new Map(participants.map(({ id, name }) => [id, name]));
     return rows.map((row) => ({
       ...row,
       negotiation: row.negotiation ? publicState(row.negotiation) : null,
-      participantNames:
-        row.negotiation?.status === "CONFIRMED" &&
-        row.proposal?.plan.participantIds.includes(ctx.session.user.id)
-          ? row.proposal.plan.participantIds.map(
-              (id) => names.get(id) ?? "Participant",
-            )
-          : [],
     }));
   }),
   get: p.input(idInput).query(async ({ ctx, input }) => {

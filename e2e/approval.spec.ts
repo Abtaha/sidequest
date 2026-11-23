@@ -184,7 +184,7 @@ test("participants approve independently, revise and decline while another accou
       .filter({ hasText: "Confirmed by everyone" });
     await expect(confirmed).toBeVisible();
     await expect(
-      confirmed.getByText(/Synthetic Approval Tester 2/),
+      confirmed.getByText("3 participants", { exact: true }),
     ).toBeVisible();
     await expect(
       pageA
@@ -192,6 +192,13 @@ test("participants approve independently, revise and decline while another accou
         .getByRole("button"),
     ).toHaveCount(0);
     await confirmed.click();
+    const details = pageA.getByRole("dialog");
+    await expect(
+      details.getByText(/With .*Synthetic Approval Tester 2/),
+    ).toBeVisible();
+    await expect(
+      details.getByText("Confirmed by every participant.", { exact: true }),
+    ).toBeVisible();
     const start = new Date(+new Date(initial.start) + 3_600_000).toISOString(),
       end = new Date(+new Date(initial.end) + 3_600_000).toISOString();
     await service.revise(a, {
