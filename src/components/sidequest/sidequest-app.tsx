@@ -207,7 +207,6 @@ export default function SideQuestApp({
   }
   function openNotification(id: string) {
     setSelectedNegotiation(id);
-    setNewNotification(null);
     setShowNotifications(false);
   }
   function run(id: string) {
@@ -376,20 +375,36 @@ export default function SideQuestApp({
       </main>
       <MobileNav active={activeView} onNavigate={navigate} />
       {newNotification && (
-        <button
-          type="button"
-          aria-label={`Open new notification: ${newNotification.title}`}
-          onClick={() => openNotification(newNotification.id)}
-          className="fixed inset-x-4 bottom-20 z-50 mx-auto w-[min(24rem,calc(100vw-2rem))] rounded-2xl border border-[#dfe2da] bg-white px-4 py-3 text-left shadow-2xl shadow-black/15 transition hover:-translate-y-0.5 lg:bottom-6"
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed inset-x-4 bottom-20 z-[60] mx-auto w-[min(24rem,calc(100vw-2rem))] lg:bottom-6"
         >
-          <p className="text-[11px] font-bold tracking-[0.12em] text-[#7f8b82] uppercase">
-            New notification
-          </p>
-          <p className="mt-1 text-sm font-semibold text-[#202a24]">
-            {newNotification.title}
-          </p>
-          <p className="mt-1 text-xs text-[#737d76]">Click to review</p>
-        </button>
+          <button
+            type="button"
+            aria-label={`Open new notification: ${newNotification.title}`}
+            onClick={() => openNotification(newNotification.id)}
+            className="w-full rounded-2xl border border-[#dfe2da] bg-white px-4 py-4 text-left shadow-2xl shadow-black/20 transition hover:-translate-y-0.5 hover:shadow-black/25"
+          >
+            <div className="flex items-start gap-3">
+              <span className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#e7eddf] text-[#244a36]">
+                <Icon name="bell" className="h-4 w-4" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[11px] font-bold uppercase tracking-[0.12em] text-[#7f8b82]">
+                  New notification
+                </span>
+                <span className="mt-1 block text-sm font-semibold text-[#202a24]">
+                  {newNotification.title}
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-[#737d76]">
+                  {newNotification.status.toLowerCase().replaceAll("_", " ")}
+                  {" · Click to review"}
+                </span>
+              </span>
+            </div>
+          </button>
+        </div>
       )}
       {selected && (
         <ActivityDetails
