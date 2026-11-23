@@ -95,6 +95,10 @@ export default function SideQuestApp({
   const notificationToastTimer = React.useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
+  const seenNotifications = React.useRef<{
+    userId: string;
+    ids: Set<string>;
+  } | null>(null);
   const activities = (catalog.data ?? []).map(catalogActivity);
   const people: (Person & { id: string })[] = (peopleQuery.data ?? []).map(
     (person) => ({
@@ -123,61 +127,45 @@ export default function SideQuestApp({
       : [],
   );
   React.useEffect(() => {
-    if (typeof window === "undefined" || !notifications.length) return;
+    if (!quests.isSuccess) return;
 
     const storageKey = `sidequest:seen-notifications:${userId}`;
-    let seen = new Set<string>();
-
-    try {
-      const stored = window.localStorage.getItem(storageKey);
-      if (stored) {
-        const parsed: unknown = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          seen = new Set(parsed.filter((id): id is string => typeof id === "string"));
-        }
-      }
-    } catch {
-      // If storage is unavailable, keep the detection in memory for this session.
-    }
-
     const currentIds = notifications.map((notification) => notification.id);
-    const hasStoredHistory = window.localStorage.getItem(storageKey) !== null;
-
-    // On the very first visit, establish a baseline so existing notifications
-    // do not look new. If the user has visited before, unseen IDs are new even
-    // when they arrived while the user was away.
-    if (!hasStoredHistory) {
+    if (seenNotifications.current?.userId !== userId) {
+      let initialIds = currentIds;
       try {
-        window.localStorage.setItem(storageKey, JSON.stringify(currentIds));
+        const stored = window.localStorage.getItem(storageKey);
+        const parsed: unknown = stored === null ? null : JSON.parse(stored);
+        if (Array.isArray(parsed))
+          initialIds = parsed.filter(
+            (id): id is string => typeof id === "string",
+          );
       } catch {
-        // Continue without persistence if localStorage is unavailable.
+        // Keep tracking notifications for this session if storage is unavailable.
       }
-      return;
+      seenNotifications.current = { userId, ids: new Set(initialIds) };
     }
 
-    const newlyReceived = notifications.filter(
-      (notification) => !seen.has(notification.id),
-    );
-    if (!newlyReceived.length) return;
-
-    const nextSeen = new Set([...seen, ...currentIds]);
+    const seen = seenNotifications.current.ids;
+    const notification = notifications
+      .filter((item) => !seen.has(item.id))
+      .at(-1);
+    for (const id of currentIds) seen.add(id);
     try {
-      window.localStorage.setItem(storageKey, JSON.stringify([...nextSeen]));
+      window.localStorage.setItem(storageKey, JSON.stringify([...seen]));
     } catch {
-      // Keep the current-session detection working even if persistence fails.
+      // Session tracking is still active.
     }
 
-    const notification = newlyReceived[newlyReceived.length - 1];
+    if (!notification) return;
     setNewNotification(notification);
-
-    if (notificationToastTimer.current) {
+    if (notificationToastTimer.current)
       clearTimeout(notificationToastTimer.current);
-    }
     notificationToastTimer.current = setTimeout(() => {
       setNewNotification(null);
       notificationToastTimer.current = null;
     }, 5000);
-  }, [notifications, userId]);
+  }, [notifications, quests.isSuccess, userId]);
 
   React.useEffect(
     () => () => {
@@ -392,15 +380,13 @@ export default function SideQuestApp({
           onClick={() => openNotification(newNotification.id)}
           className="fixed inset-x-4 bottom-20 z-50 mx-auto w-[min(24rem,calc(100vw-2rem))] rounded-2xl border border-[#dfe2da] bg-white px-4 py-3 text-left shadow-2xl shadow-black/15 transition hover:-translate-y-0.5 lg:bottom-6"
         >
-          <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-[#7f8b82]">
+          <p className="text-[11px] font-bold tracking-[0.12em] text-[#7f8b82] uppercase">
             New notification
           </p>
           <p className="mt-1 text-sm font-semibold text-[#202a24]">
             {newNotification.title}
           </p>
-          <p className="mt-1 text-xs text-[#737d76]">
-            Click to review
-          </p>
+          <p className="mt-1 text-xs text-[#737d76]">Click to review</p>
         </button>
       )}
       {selected && (
