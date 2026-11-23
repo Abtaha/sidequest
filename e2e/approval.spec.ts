@@ -11,7 +11,8 @@ import { EventAgent } from "../src/server/sidequest/events";
 import { proposalHash } from "../src/server/sidequest/constraints";
 import { QueueModel } from "../tests/scripted-model";
 import type { AgentAction } from "../src/server/sidequest/types";
-test("two signed-in humans approve independently, receive updates and lose stale approval after revision", async ({
+import SuperJSON from "superjson";
+test("participants approve independently, revise and decline while another account stays excluded", async ({
   browser,
   baseURL,
 }) => {
@@ -24,10 +25,17 @@ test("two signed-in humans approve independently, receive updates and lose stale
     db = drizzle(conn, { schema });
   const saver = PostgresSaver.fromConnString(url);
   const firstContext = await browser.newContext({ baseURL }),
-    secondContext = await browser.newContext({ baseURL });
+    secondContext = await browser.newContext({ baseURL }),
+    thirdContext = await browser.newContext({ baseURL }),
+    outsiderContext = await browser.newContext({ baseURL });
   try {
     const identities: string[] = [];
-    for (const [index, context] of [firstContext, secondContext].entries()) {
+    for (const [index, context] of [
+      firstContext,
+      secondContext,
+      thirdContext,
+      outsiderContext,
+    ].entries()) {
       const signup = await context.request.post("/api/auth/sign-up/email", {
         headers: { origin: baseURL! },
         data: {
@@ -55,7 +63,8 @@ test("two signed-in humans approve independently, receive updates and lose stale
         .insert(schema.availability)
         .values({ userId: id, start: windowStart, end: windowEnd });
     }
-    const [a, b] = identities as [string, string];
+    const participants = identities.slice(0, 3);
+    const [a, b, c] = participants as [string, string, string];
     const model = new QueueModel([]),
       service = new NegotiationService(
         db,
@@ -66,7 +75,7 @@ test("two signed-in humans approve independently, receive updates and lose stale
       );
     const option = (
       await new EventAgent(db, model).options(
-        await service.participants(identities, {}),
+        await service.participants(participants, {}),
       )
     )[0]!;
     const initial = option.plan,
@@ -86,20 +95,49 @@ test("two signed-in humans approve independently, receive updates and lose stale
     });
     model.replies.push(
       action("INQUIRY", b, "Would this activity suit you?"),
-      action("PROPOSE", a, "This catalog option fits", { plan: initial }),
+      action("PROPOSE", c, "This catalog option fits", { plan: initial }),
+      action("ACCEPT", a, "Accepted by Scout C", { proposalHash: firstHash }),
       action("ACCEPT", b, "Accepted by Scout A", { proposalHash: firstHash }),
-      action("ACCEPT", a, "Accepted by Scout B", { proposalHash: firstHash }),
+      action("ACCEPT", c, "Accepted by Scout B", { proposalHash: firstHash }),
     );
     const quest = await service.create(a, {
       intent: "Synthetic browser approval scenario",
       requestId: randomUUID(),
       constraints: {},
     });
-    const n = await service.start(a, quest.id, [b]);
-    await service.run(a, n.id);
+    const n = await service.start(a, quest.id, [b, c]);
+    const agreed = await service.run(a, n.id);
+    expect(agreed.activeProposalId).not.toBeNull();
+    const query = (procedure: string, input: unknown) =>
+      `/api/trpc/${procedure}?input=${encodeURIComponent(JSON.stringify(SuperJSON.serialize(input)))}`;
+    const outsiderPage = await outsiderContext.newPage();
+    await outsiderPage.goto("/app");
+    await outsiderPage
+      .getByRole("button", { name: "Plans", exact: true })
+      .first()
+      .click();
+    await expect(
+      outsiderPage.getByText("Your calendar is wide open", { exact: true }),
+    ).toBeVisible();
+    const outsiderDetail = await outsiderContext.request.get(
+      query("sidequest.getNegotiation", { id: n.id }),
+    );
+    const outsiderMessages = await outsiderContext.request.get(
+      query("sidequest.getMessages", { id: n.id, afterTurn: -1 }),
+    );
+    expect(outsiderDetail.status()).toBe(404);
+    expect(outsiderMessages.status()).toBe(404);
     const pageA = await firstContext.newPage(),
-      pageB = await secondContext.newPage();
-    for (const page of [pageA, pageB]) {
+      pageB = await secondContext.newPage(),
+      pageC = await thirdContext.newPage();
+    const pages = [pageA, pageB, pageC];
+    const browserErrors: string[] = [];
+    for (const page of pages) {
+      page.on("pageerror", (error) => browserErrors.push(error.message));
+      page.on("console", (message) => {
+        if (message.type() === "error" && message.text().includes("same key"))
+          browserErrors.push(message.text());
+      });
       await page.goto("/app");
       await page
         .getByRole("button", { name: "Plans", exact: true })
@@ -117,7 +155,7 @@ test("two signed-in humans approve independently, receive updates and lose stale
       .getByRole("button", { name: "Approve proposal v1", exact: true })
       .click();
     await expect(
-      pageA.getByText("1 of 2 humans have approved this version.", {
+      pageA.getByText("1 of 3 humans have approved this version.", {
         exact: false,
       }),
     ).toBeVisible();
@@ -128,11 +166,21 @@ test("two signed-in humans approve independently, receive updates and lose stale
       .getByRole("button", { name: "Approve proposal v1", exact: true })
       .click();
     await expect(
-      pageA.getByText("Confirmed by every participant.", { exact: true }),
+      pageA.getByText("2 of 3 humans have approved this version.", {
+        exact: false,
+      }),
     ).toBeVisible();
-    await expect(
-      pageB.getByText("Confirmed by every participant.", { exact: true }),
-    ).toBeVisible();
+    await pageC.getByRole("button", { name: "Approve proposal v1" }).click();
+    for (const page of pages)
+      await expect(
+        page.getByText("Confirmed by every participant.", { exact: true }),
+      ).toBeVisible();
+    await pageA.keyboard.press("Escape");
+    const confirmed = pageA
+      .getByRole("button")
+      .filter({ hasText: "Confirmed by everyone" });
+    await expect(confirmed).toBeVisible();
+    await confirmed.click();
     const start = new Date(+new Date(initial.start) + 3_600_000).toISOString(),
       end = new Date(+new Date(initial.end) + 3_600_000).toISOString();
     await service.revise(a, {
@@ -163,12 +211,19 @@ test("two signed-in humans approve independently, receive updates and lose stale
         proposalHash: hash,
       }),
     });
-    for (const page of [pageA, pageB]) {
+    await service.execute(n.id, {
+      actor: c,
+      turn: current.turn + 3,
+      action: action("ACCEPT", a, "New time accepted C", {
+        proposalHash: hash,
+      }),
+    });
+    for (const page of pages) {
       await expect(
         page.getByRole("button", { name: "Approve proposal v2", exact: true }),
       ).toBeVisible();
       await expect(
-        page.getByText("0 of 2 humans have approved this version.", {
+        page.getByText("0 of 3 humans have approved this version.", {
           exact: false,
         }),
       ).toBeVisible();
@@ -176,9 +231,31 @@ test("two signed-in humans approve independently, receive updates and lose stale
         page.getByText("Confirmed by every participant.", { exact: true }),
       ).toHaveCount(0);
     }
+    const staleApproval = await secondContext.request.post(
+      "/api/trpc/sidequest.approveProposal",
+      {
+        headers: { origin: baseURL! },
+        data: SuperJSON.serialize({
+          negotiationId: n.id,
+          proposalId: agreed.activeProposalId,
+          hash: firstHash,
+        }),
+      },
+    );
+    expect(staleApproval.status()).toBe(409);
+    await pageB.getByRole("button", { name: "Decline proposal" }).click();
+    for (const page of pages) {
+      await expect(page.getByText(/human rejected/i)).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Approve proposal v2" }),
+      ).toHaveCount(0);
+    }
+    expect(browserErrors).toEqual([]);
   } finally {
     await firstContext.close();
     await secondContext.close();
+    await thirdContext.close();
+    await outsiderContext.close();
     await saver.end();
     await conn.end();
   }

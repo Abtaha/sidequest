@@ -8,16 +8,19 @@ import { type MemoryService } from "./memory";
 import { type Model } from "./model";
 import { type EventAgent } from "./events";
 import { actionSchema, type AgentAction } from "./types";
+import { planningCommitmentsForScout } from "./plan-context";
 export type Turn = {
   userId: string;
   conversationId: string;
   intent: string;
   revisionTurn?: number;
   previousActivity?: string;
+  previousStart?: string;
   revisionInstruction?: string;
   interestQuery?: string;
   participants: string[];
   incomingFrom?: string;
+  incomingMessageId?: string;
   proposal: { hash: string } | null;
   constraints: unknown;
   options: ReturnType<EventAgent["optionsFor"]>;
@@ -44,9 +47,12 @@ export function createPersonalAgent(
         revisionInstruction,
         interestQuery,
       } = s.input;
-      const relevant = await memory.retrieve(userId, {
-        query: revisionInstruction ?? interestQuery ?? intent,
-      });
+      const [relevant, commitments] = await Promise.all([
+        memory.retrieve(userId, {
+          query: revisionInstruction ?? interestQuery ?? intent,
+        }),
+        planningCommitmentsForScout(db, userId, conversationId),
+      ]);
       // Include a few recent preferences for vague requests with no matching search tokens.
       const recent = await memory.retrieve(userId, { limit: 6 });
       const transcript = await new Mailbox(
@@ -95,6 +101,7 @@ export function createPersonalAgent(
         .limit(3);
       return {
         context: {
+          commitments,
           memories: [
             ...new Map(
               [...relevant, ...recent].map((m) => [
@@ -129,27 +136,34 @@ export function createPersonalAgent(
         throw new Error("No other Scout belongs to this negotiation");
       const replyTo = recipients.find((id) => id === s.input.incomingFrom);
       const { options } = s.input;
-      const availableActivityIds = options.map(({ plan }) => plan.activityId);
+      const slots = options.map((option, index) => ({
+        ...option,
+        optionId: String(index + 1),
+      }));
       const [firstType, ...otherTypes] = actionSchema.shape.type.options.filter(
         (type) =>
           (type !== "ACCEPT" || Boolean(s.input.proposal)) &&
           (type !== "PROPOSE" || !s.input.proposal) &&
-          ((type !== "PROPOSE" && type !== "COUNTER") ||
-            availableActivityIds.length > 0),
+          ((type !== "PROPOSE" && type !== "COUNTER") || slots.length > 0),
       );
       const action = await model.generate(
-        `You are the independent Scout of user ${s.input.userId}. Represent only this user using their private context. Use the latest explicit preferences and corrections. Share only necessary planning details.
+        `You are the independent Scout of user ${s.input.userId}. Represent only this user using their private context. Use the latest explicit preferences and corrections. Check commitments when choosing or voting on a slot. For an overlap with a confirmed plan, prefer a different time or ask your human if a conflict must be resolved. A tentative proposal may change. Share only availability or the need for a different time with other Scouts. Share only necessary planning details.
 
-${s.input.proposal ? "Your task this turn is to vote on the active proposal. Accept it if it fits your user's needs. A COUNTER is a different plan, so never select the active activity as a counter." : "Your task this turn is to help the group find a new plan."}
+${s.input.proposal ? "Your task this turn is to vote on the active proposal. Accept it if it fits your user's needs. A COUNTER is a different plan, so never select the active time slot as a counter." : "Your task this turn is to help the group find a new plan."}
 
-A revision keeps the same participants. If revisionInstruction is supplied, it is your user's latest change to this plan. Follow it ahead of older requests. Keep previousActivity if the user only asked about scheduling. If no supplied option fits the requested change, use REQUEST_HUMAN. When reviewing another Scout's revised proposal, evaluate the new activity against your own user's preferences and constraints. If it fits, ACCEPT. Counter only for a concrete unmet need or strong preference of your user, and choose an option that supports the activity change. A soft preference may be compromised.
+A revision keeps the same participants. If revisionInstruction is supplied, it is your user's latest change to this plan. Follow it ahead of older requests. Keep previousActivity if the user only asked about scheduling. If they ask for an earlier or later time, compare the candidate's start to previousStart. If no supplied option fits the requested change, use REQUEST_HUMAN. When reviewing another Scout's revised proposal, evaluate the new activity against your own user's preferences and constraints. If it fits, ACCEPT. Counter only for a concrete unmet need or strong preference of your user, and choose an option that supports the activity change. A soft preference may be compromised.
 
-Use PROPOSE when there is no active proposal and a supplied option fits. Use COUNTER to suggest a different supplied option. For either action, set plan.activityId to one of availableActivityIds. The server uses that option's exact time and participants. For all other actions use plan: null. Refer to the proposal card for exact times and capacity. Group size is the number of participants. Venue capacity is the maximum it can hold.
+Use PROPOSE when there is no active proposal and a supplied option fits. Use COUNTER to suggest a different supplied option, including a different time for the same activity. For either action, copy the optionId into plan. The server uses that option's exact time and participants. For all other actions use plan: null. Refer to the proposal card for exact times and capacity. Group size is the number of participants. Venue capacity is the maximum it can hold.
 
-Use ACCEPT when the top-level proposal fits your user. The server records votes against the version shown to you. Agent acceptance never approves for a human. Ask other Scouts about their own users if you need missing information. Do not repeat a question already answered. Use REQUEST_HUMAN for a decision only your own human can make. Use null for recipientId on CONSULT_EVENTS, REQUEST_HUMAN, and END. For other actions choose an allowedRecipientIds entry. One-to-one routing is automatic.`,
+Use ACCEPT when the top-level proposal fits your user. The server records votes against the version shown to you. Agent acceptance never approves for a human. Ask other Scouts about their own users if you need missing information. If incomingMessageId is supplied, respond to that message. Do not repeat a question already answered. Use REQUEST_HUMAN for a decision only your own human can make. Use WITHDRAW if your user would pass on the outing after considering the options. Give a short response without revealing private reasons. An automatically assembled group may continue without your user. Use null for recipientId on CONSULT_EVENTS, REQUEST_HUMAN, WITHDRAW, and END. For other actions choose an allowedRecipientIds entry. One-to-one routing is automatic.`,
         actionSchema.extend({
           type: z.enum([firstType!, ...otherTypes]),
-          plan: z.object({ activityId: z.string() }).nullish(),
+          plan: z
+            .object({
+              activityId: z.string().optional(),
+              optionId: z.coerce.string().optional(),
+            })
+            .nullish(),
           proposalHash: actionSchema.shape.proposalHash.optional(),
           recipientId: otherRecipients.length
             ? z.enum([onlyRecipient, ...otherRecipients]).nullish()
@@ -158,19 +172,23 @@ Use ACCEPT when the top-level proposal fits your user. The server records votes 
         {
           ...s.input,
           allowedRecipientIds: recipients,
-          availableActivityIds,
+          options: slots,
           privateContext: s.context,
         },
       );
       const internal =
         action.type === "CONSULT_EVENTS" ||
         action.type === "REQUEST_HUMAN" ||
-        action.type === "END";
+        action.type === "END" ||
+        action.type === "WITHDRAW";
       const proposesPlan =
         action.type === "PROPOSE" || action.type === "COUNTER";
       const plan = proposesPlan
-        ? options.find(
-            (option) => option.plan.activityId === action.plan?.activityId,
+        ? (
+            slots.find((option) => option.optionId === action.plan?.optionId) ??
+            slots.find(
+              (option) => option.plan.activityId === action.plan?.activityId,
+            )
           )?.plan
         : null;
       if (proposesPlan && !plan)

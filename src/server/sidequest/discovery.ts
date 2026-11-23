@@ -11,6 +11,24 @@ const genericWords = new Set(
     .split(" "),
 );
 
+export function requestedGroupSize(intent: string) {
+  const counts = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+  const total = /\b(?:group|party) of (two|three|four|five|[2-5])\b/i.exec(
+    intent,
+  );
+  const others =
+    /\bwith (one|two|three|four|[1-4]) (?:other )?(?:people|friends|classmates|participants)\b/i.exec(
+      intent,
+    );
+  const count = total?.[1] ?? others?.[1];
+  if (!count) return undefined;
+  const normalized = count.toLowerCase();
+  const size =
+    (counts[normalized as keyof typeof counts] ?? Number(normalized)) +
+    (total ? 0 : 1);
+  return { minGroup: size, maxGroup: size };
+}
+
 function interestTerms(text: string): Set<string> {
   const words =
     text

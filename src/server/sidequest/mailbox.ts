@@ -51,7 +51,7 @@ export class Mailbox {
       .returning();
     return message!;
   }
-  async markProcessed(userId: string) {
+  async markProcessed(userId: string, messageId: string) {
     if (!this.participants.includes(userId))
       throw new DomainError("FORBIDDEN", "Unauthorized mailbox");
     await this.store
@@ -61,6 +61,7 @@ export class Mailbox {
         and(
           eq(agentMessages.conversationId, this.conversationId),
           eq(agentMessages.recipientId, userId),
+          eq(agentMessages.id, messageId),
         ),
       );
   }

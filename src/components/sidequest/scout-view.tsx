@@ -8,17 +8,24 @@ import { constraintsSchema } from "@/lib/sidequest-constraints";
 import { localDateValue } from "@/lib/sidequest-data";
 import { PageHeading } from "./shared";
 import type { View } from "./types";
+import { ScoutPlanCard } from "./scout-plan-card";
 type MemoryRecord = RouterOutputs["memory"]["list"][number];
 export function ScoutView({
+  userId,
   userName,
+  plans,
   onNavigate,
   onStartPlanning,
   onRevision,
+  onOpenPlan,
 }: {
+  userId: string;
   userName: string;
+  plans: RouterOutputs["sidequest"]["list"];
   onNavigate: (view: View) => void;
-  onStartPlanning: (questId: string) => Promise<void>;
+  onStartPlanning: (questId: string) => Promise<string>;
   onRevision: (negotiationId: string) => void;
+  onOpenPlan: (negotiationId: string) => void;
 }) {
   const utils = api.useUtils();
   const conversations = api.scout.listConversations.useQuery();
@@ -39,16 +46,37 @@ export function ScoutView({
   const retry = React.useRef<{
     content: string;
     conversationId?: string;
+    revisionNegotiationId?: string;
     requestId: string;
   } | null>(null);
   const send = api.scout.sendMessage.useMutation();
+  const composer = React.useRef<HTMLTextAreaElement>(null);
+  const [editingPlan, setEditingPlan] = React.useState<string>();
+  const [focusedPlans, setFocusedPlans] = React.useState<
+    Record<string, string>
+  >({});
+  const planId = conversationId
+    ? (focusedPlans[conversationId] ??
+      plans.find(
+        (plan) =>
+          plan.negotiation &&
+          plan.negotiation.status !== "CANCELLED" &&
+          conversation.data?.messages.some(
+            (message) => message.id === plan.sidequest.requestId,
+          ),
+      )?.negotiation?.id)
+    : undefined;
   const [planning, setPlanning] = React.useState(false);
+  const revisionNegotiationId =
+    editingPlan === planId ? editingPlan : undefined;
   const [retryQuestId, setRetryQuestId] = React.useState<string>();
-  async function startPlan(questId: string) {
+  async function startPlan(questId: string, chatId = conversationId) {
     setPlanning(true);
     setError("");
     try {
-      await onStartPlanning(questId);
+      const id = await onStartPlanning(questId);
+      if (chatId)
+        setFocusedPlans((previous) => ({ ...previous, [chatId]: id }));
       setRetryQuestId(undefined);
     } catch (error) {
       setRetryQuestId(questId);
@@ -67,11 +95,13 @@ export function ScoutView({
     if (!content.trim() || send.isPending || planning) return;
     if (
       retry.current?.content !== content ||
-      retry.current.conversationId !== conversationId
+      retry.current.conversationId !== conversationId ||
+      retry.current.revisionNegotiationId !== revisionNegotiationId
     )
       retry.current = {
         content,
         conversationId,
+        revisionNegotiationId,
         requestId: crypto.randomUUID(),
       };
     setError("");
@@ -79,10 +109,19 @@ export function ScoutView({
       const result = await send.mutateAsync(retry.current);
       setSelection(result.conversationId);
       setDraft("");
+      setEditingPlan(undefined);
       retry.current = null;
       void Promise.all([utils.scout.invalidate(), utils.memory.invalidate()]);
-      if (result.revisedNegotiationId) onRevision(result.revisedNegotiationId);
-      else if (result.planningQuestId) await startPlan(result.planningQuestId);
+      if (result.revisedNegotiationId) {
+        const id = result.revisedNegotiationId;
+        setFocusedPlans((previous) => ({
+          ...previous,
+          [result.conversationId]: id,
+        }));
+        onRevision(id);
+      } else if (result.planningQuestId) {
+        await startPlan(result.planningQuestId, result.conversationId);
+      }
     } catch (error) {
       setError(
         error instanceof Error
@@ -217,6 +256,20 @@ export function ScoutView({
               </p>
             )}
           </div>
+          {planId && (
+            <div className="px-4 pb-3 sm:px-5">
+              <ScoutPlanCard
+                key={planId}
+                id={planId}
+                userId={userId}
+                onOpen={() => onOpenPlan(planId)}
+                onSuggest={() => {
+                  setEditingPlan(planId);
+                  composer.current?.focus();
+                }}
+              />
+            </div>
+          )}
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -224,30 +277,46 @@ export function ScoutView({
             }}
             className="border-t border-[#e3e6df] p-4"
           >
-            <div className="mb-3 flex flex-wrap gap-2">
-              {[
-                "I want to add more context",
-                "My availability changed",
-                "Help me change a plan",
-              ].map((text) => (
+            {revisionNegotiationId && (
+              <div className="mb-2 flex items-center gap-3 text-sm text-[#465d4b]">
+                <span>Changing this plan</span>
                 <Button
-                  key={text}
                   design
                   type="button"
-                  onClick={() => setDraft(text)}
-                  className="rounded-full bg-[#f0f2ec] px-3 py-2 text-xs"
+                  className="text-xs underline"
+                  onClick={() => setEditingPlan(undefined)}
                 >
-                  {text}
+                  Cancel change
                 </Button>
-              ))}
-            </div>
+              </div>
+            )}
+            {!planId && (
+              <div className="mb-3 flex flex-wrap gap-2">
+                {[
+                  "I want to add more context",
+                  "My availability changed",
+                  "Help me change a plan",
+                ].map((text) => (
+                  <Button
+                    key={text}
+                    design
+                    type="button"
+                    onClick={() => setDraft(text)}
+                    className="rounded-full bg-[#f0f2ec] px-3 py-2 text-xs"
+                  >
+                    {text}
+                  </Button>
+                ))}
+              </div>
+            )}
             <div className="flex items-end gap-2 rounded-2xl border border-[#d8ddd5] bg-[#fbfcf8] p-2 pl-4">
               <Textarea
+                ref={composer}
                 design
                 aria-label="Message Scout"
                 value={draft}
                 disabled={send.isPending}
-                maxLength={6000}
+                maxLength={revisionNegotiationId ? 1000 : 6000}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (
@@ -260,7 +329,11 @@ export function ScoutView({
                   }
                 }}
                 rows={2}
-                placeholder="Tell Scout anything or ask for help…"
+                placeholder={
+                  planId
+                    ? "Ask to move the time or suggest another activity…"
+                    : "Tell Scout anything or ask for help…"
+                }
                 className="flex-1 resize-none bg-transparent py-2 text-sm"
               />
               <Button

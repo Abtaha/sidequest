@@ -69,7 +69,7 @@ export function PlansView({
                     <div className="flex -space-x-2">
                       {e.people.slice(0, 3).map((e, s) => (
                         <span
-                          key={e}
+                          key={`${e}-${s}`}
                           className={`grid h-7 w-7 place-items-center rounded-full border-2 border-white text-[9px] font-bold ${["bg-[#d8c4b6]", "bg-[#c5d6c1]", "bg-[#c4cee0]"][s]}`}
                         >
                           {e[0]}

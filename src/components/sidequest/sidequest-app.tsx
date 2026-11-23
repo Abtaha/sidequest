@@ -225,13 +225,18 @@ export default function SideQuestApp({
     setError("");
     resume.mutate({ id });
   }
-  async function startPlanning(sidequestId: string, candidateIds?: string[]) {
+  async function startPlanning(
+    sidequestId: string,
+    candidateIds?: string[],
+    showDetails = true,
+  ) {
     setError("");
     const n = await start.mutateAsync({ sidequestId, candidateIds });
     setSelected(null);
-    setSelectedNegotiation(n.id);
+    if (showDetails) setSelectedNegotiation(n.id);
     void utils.sidequest.invalidate();
     if (n.status === "DISCOVERING" || n.status === "NEGOTIATING") run(n.id);
+    return n.id;
   }
   async function coordinate(intent: string, candidateIds?: string[]) {
     if (pending || !intent.trim()) return;
@@ -314,11 +319,13 @@ export default function SideQuestApp({
         )}
         {activeView === "Scout" && (
           <ScoutView
+            userId={userId}
             userName={userName}
+            plans={quests.data ?? []}
             onNavigate={navigate}
-            onStartPlanning={startPlanning}
+            onStartPlanning={(id) => startPlanning(id, undefined, false)}
+            onOpenPlan={setSelectedNegotiation}
             onRevision={(id) => {
-              setSelectedNegotiation(id);
               void utils.sidequest.invalidate();
               run(id);
             }}
