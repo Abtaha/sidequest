@@ -6,6 +6,7 @@ import * as s from "@/server/db/schema";
 import { services } from "@/server/sidequest/services";
 import { constraintsSchema, DomainError } from "@/server/sidequest/types";
 import { checkContacts } from "@/server/sidequest/constraints";
+import { discoveryScope } from "@/server/sidequest/discovery";
 import { lock } from "@/server/sidequest/storage";
 // Domain errors carry public-safe messages. Database/provider details never reach clients.
 const p = protectedProcedure.use(async ({ next }) => {
@@ -152,6 +153,7 @@ export const profileRouter = createTRPCRouter({
         socialStyle: z.string().max(80),
         budget: z.string().max(80),
         optIn: z.boolean(),
+        openDiscovery: z.boolean().optional(),
         windows: z
           .array(
             z
@@ -180,12 +182,21 @@ export const profileRouter = createTRPCRouter({
         if (prior) return { saved: true };
         await tx
           .insert(s.profiles)
-          .values({ userId, discoverable: input.optIn, sharing: input.optIn })
+          .values({
+            userId,
+            discoverable: input.optIn,
+            sharing: input.optIn,
+            openDiscovery: input.optIn && input.openDiscovery === true,
+          })
           .onConflictDoUpdate({
             target: s.profiles.userId,
             set: {
               discoverable: input.optIn,
               sharing: input.optIn,
+              openDiscovery:
+                input.openDiscovery === undefined
+                  ? undefined
+                  : input.optIn && input.openDiscovery,
               updatedAt: new Date(),
             },
           });
@@ -275,6 +286,7 @@ export const profileRouter = createTRPCRouter({
     .input(
       z.object({
         discoverable: z.boolean(),
+        openDiscovery: z.boolean().optional(),
         sharing: z.boolean(),
         circle: z.string().min(1).max(80),
         blockedUsers: z.array(z.string().max(100)).max(100),
@@ -561,7 +573,7 @@ export const peopleRouter = createTRPCRouter({
         and(
           eq(s.profiles.discoverable, true),
           eq(s.profiles.sharing, true),
-          eq(s.profiles.circle, own.circle),
+          discoveryScope(own),
           ne(s.profiles.userId, own.userId),
         ),
       )

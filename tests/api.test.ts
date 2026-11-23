@@ -181,3 +181,63 @@ it("exposes only permitted public people and strips private negotiation state fr
     }
   }
 });
+
+it("matches strangers across circles only when both opt in", async () => {
+  const [hostId, guestId, privateId] = syntheticIds;
+  const host = caller(hostId);
+  const guest = caller(guestId);
+  const restricted = caller(privateId);
+  const preferences = {
+    discoverable: true,
+    sharing: true,
+    blockedUsers: [],
+    constraints: {},
+  };
+  await host.profile.update({
+    ...preferences,
+    circle: "host-circle",
+    openDiscovery: true,
+  });
+  await guest.profile.update({
+    ...preferences,
+    circle: "guest-circle",
+    openDiscovery: true,
+  });
+  await restricted.profile.update({ ...preferences, circle: "private-circle" });
+
+  expect(await host.people.list()).toEqual([
+    { id: guestId, name: "Synthetic Scout User 2" },
+  ]);
+  expect(await restricted.people.list()).toEqual([]);
+  await guest.profile.update({
+    ...preferences,
+    circle: "guest-circle",
+    blockedUsers: [hostId!],
+  });
+  expect(await host.people.list()).toEqual([]);
+  await guest.profile.update({ ...preferences, circle: "guest-circle" });
+  const quest = await host.sidequest.create({
+    requestId: randomUUID(),
+    intent: "Find a board game meetup with one other person.",
+    constraints: {},
+  });
+  await expect(
+    host.sidequest.startNegotiation({
+      sidequestId: quest.id,
+      candidateIds: [privateId!],
+    }),
+  ).rejects.toThrow("Both people must opt into matching beyond their circle");
+  const negotiation = await host.sidequest.startNegotiation({
+    sidequestId: quest.id,
+  });
+  expect(
+    (await guest.sidequest.getNegotiation({ id: negotiation.id })).participants,
+  ).toEqual([hostId, guestId]);
+
+  await guest.profile.update({
+    ...preferences,
+    circle: "guest-circle",
+    openDiscovery: false,
+  });
+  expect(await host.people.list()).toEqual([]);
+});

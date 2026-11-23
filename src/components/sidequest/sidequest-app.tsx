@@ -111,7 +111,7 @@ export default function SideQuestApp({
       color: "bg-[#c5d6c1]",
       status: "Open to agent planning",
       interests: [],
-      overlap: "Same planning circle",
+      overlap: "Available for matching",
     }),
   );
   const pending = create.isPending || start.isPending;
@@ -396,7 +396,7 @@ export default function SideQuestApp({
           onClose={() => setSelected(null)}
           onCoordinate={() =>
             void coordinate(
-              `Explore ${selected.title} or a compatible alternative with people in my circle.`,
+              `Explore ${selected.title} or a compatible alternative with people who might enjoy it.`,
             )
           }
         />

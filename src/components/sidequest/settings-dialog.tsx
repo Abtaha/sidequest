@@ -48,6 +48,7 @@ function SettingsForm({
     router = useRouter(),
     utils = api.useUtils();
   const [discoverable, setDiscoverable] = React.useState(profile.discoverable),
+    [openDiscovery, setOpenDiscovery] = React.useState(profile.openDiscovery),
     [sharing, setSharing] = React.useState(profile.sharing),
     [circle, setCircle] = React.useState(profile.circle),
     [maxCost, setMaxCost] = React.useState(
@@ -88,6 +89,7 @@ function SettingsForm({
         try {
           await saveProfile.mutateAsync({
             discoverable,
+            openDiscovery,
             sharing,
             circle,
             blockedUsers: profile.blockedUsers,
@@ -118,7 +120,7 @@ function SettingsForm({
           checked={discoverable}
           onChange={(event) => setDiscoverable(event.target.checked)}
         />{" "}
-        Let people in my circle discover my Scout
+        Let other people discover my Scout
       </label>
       <label className="flex gap-3 rounded-xl bg-[#f4f5f1] p-4 text-sm">
         <input
@@ -128,6 +130,19 @@ function SettingsForm({
         />{" "}
         Allow Scouts to share necessary planning constraints. Private notes stay
         private.
+      </label>
+      <label className="flex gap-3 rounded-xl bg-[#f4f5f1] p-4 text-sm">
+        <input
+          type="checkbox"
+          checked={openDiscovery}
+          onChange={(event) => setOpenDiscovery(event.target.checked)}
+        />{" "}
+        <span>
+          Match with people across SideQuest who also opt in
+          <span className="mt-1 block text-xs text-slate-600">
+            Turn this off to match within your planning circle.
+          </span>
+        </span>
       </label>
       <label className="block text-sm">
         Planning circle

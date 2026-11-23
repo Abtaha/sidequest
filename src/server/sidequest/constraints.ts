@@ -21,6 +21,7 @@ export type Activity = {
 export type Participant = {
   userId: string;
   circle: string;
+  openDiscovery: boolean;
   sharing: boolean;
   discoverable: boolean;
   blockedUsers: string[];
@@ -80,10 +81,14 @@ export function checkContacts(
         "FORBIDDEN",
         "Participant has not opted into negotiation",
       );
-    if (p.circle !== participants[0]!.circle)
+    if (
+      participants.some(
+        (q) => q.circle !== p.circle && !(p.openDiscovery && q.openDiscovery),
+      )
+    )
       throw new DomainError(
         "FORBIDDEN",
-        "Social circle does not permit contact",
+        "Both people must opt into matching beyond their circle",
       );
     if (
       participants.some(
