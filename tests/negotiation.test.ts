@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, afterAll, beforeEach, it, expect } from "vitest";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { MemorySaver } from "@langchain/langgraph";
 import { database } from "./database";
 import { QueueModel } from "./scripted-model";
@@ -11,6 +11,7 @@ import {
   defaultLimits,
 } from "../src/server/sidequest/negotiation";
 import { EventAgent } from "../src/server/sidequest/events";
+import { createDaejeonActivities } from "../src/server/sidequest/daejeon-activities";
 import { seed, syntheticIds } from "../src/server/sidequest/seed";
 import {
   proposalHash,
@@ -59,7 +60,11 @@ async function agree() {
 }
 beforeAll(async () => {
   f = await database();
-  await seed(f.db, new Date("2099-01-01T00:00:00Z"));
+  const date = new Date("2099-01-01T00:00:00Z");
+  await seed(f.db, date);
+  // Keep the scripted negotiations on the original catalog and its known slots.
+  const demoIds = createDaejeonActivities(() => date).map(({ id }) => id);
+  await f.db.delete(s.activities).where(inArray(s.activities.id, demoIds));
 });
 afterAll(async () => {
   await f.close();
