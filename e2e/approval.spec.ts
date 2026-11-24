@@ -8,6 +8,7 @@ import * as schema from "../src/server/db/schema";
 import { MemoryService } from "../src/server/sidequest/memory";
 import { NegotiationService } from "../src/server/sidequest/negotiation";
 import { EventAgent } from "../src/server/sidequest/events";
+import { activityLabels } from "../src/server/sidequest/activity-labels";
 import { proposalHash } from "../src/server/sidequest/constraints";
 import { QueueModel } from "../tests/scripted-model";
 import type { AgentAction } from "../src/server/sidequest/types";
@@ -80,6 +81,7 @@ test("participants approve independently, revise and decline while another accou
     )[0]!;
     const initial = option.plan,
       firstHash = proposalHash(initial);
+    const activityTitle = activityLabels(option.activity).title;
     const action = (
       type: AgentAction["type"],
       recipientId: string,
@@ -146,7 +148,7 @@ test("participants approve independently, revise and decline while another accou
       const proposalRow = page
         .getByRole("region", { name: "Awaiting Approval" })
         .getByRole("button")
-        .filter({ hasText: option.activity.title });
+        .filter({ hasText: activityTitle });
       await expect(proposalRow.getByText("Awaiting approvals")).toBeVisible();
       await proposalRow.click();
       await expect(
@@ -254,7 +256,7 @@ test("participants approve independently, revise and decline while another accou
     const revisedRow = pageA
       .getByRole("region", { name: "Awaiting Approval" })
       .getByRole("button")
-      .filter({ hasText: option.activity.title });
+      .filter({ hasText: activityTitle });
     await expect(revisedRow).toBeVisible();
     await revisedRow.click();
     await expect(
@@ -294,7 +296,7 @@ test("participants approve independently, revise and decline while another accou
       .click();
     const declined = pageA
       .getByRole("button")
-      .filter({ hasText: option.activity.title });
+      .filter({ hasText: activityTitle });
     await expect(declined.getByText("Declined", { exact: true })).toBeVisible();
     await expect(
       declined.getByText("A participant declined the proposal."),

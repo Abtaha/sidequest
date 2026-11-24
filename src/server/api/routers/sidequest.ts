@@ -8,6 +8,7 @@ import { constraintsSchema, DomainError } from "@/server/sidequest/types";
 import { checkContacts } from "@/server/sidequest/constraints";
 import { discoveryScope } from "@/server/sidequest/discovery";
 import { lock } from "@/server/sidequest/storage";
+import { activityLabels } from "@/server/sidequest/activity-labels";
 // Domain errors carry public-safe messages. Database/provider details never reach clients.
 const p = protectedProcedure.use(async ({ next }) => {
   const result = await next();
@@ -347,6 +348,16 @@ function publicState(n: typeof s.negotiations.$inferSelect) {
   };
 }
 
+function publicProposal(proposal: typeof s.proposals.$inferSelect) {
+  return {
+    ...proposal,
+    activitySnapshot: {
+      ...proposal.activitySnapshot,
+      ...activityLabels(proposal.activitySnapshot),
+    },
+  };
+}
+
 const decision = z.object({
   negotiationId: z.string().uuid(),
   proposalId: z.string().uuid(),
@@ -365,6 +376,7 @@ export const sidequestRouter = createTRPCRouter({
       services().negotiation.create(ctx.session.user.id, input),
     ),
   list: p.query(async ({ ctx }) => {
+    await services().negotiation.expirePendingProposals(ctx.session.user.id);
     const rows = await ctx.db
       .select({
         sidequest: s.sidequests,
@@ -395,6 +407,7 @@ export const sidequestRouter = createTRPCRouter({
     return rows.map((row) => ({
       ...row,
       negotiation: row.negotiation ? publicState(row.negotiation) : null,
+      proposal: row.proposal ? publicProposal(row.proposal) : null,
     }));
   }),
   get: p.input(idInput).query(async ({ ctx, input }) => {
@@ -442,6 +455,10 @@ export const sidequestRouter = createTRPCRouter({
         .then(publicState),
     ),
   getNegotiation: p.input(idInput).query(async ({ ctx, input }) => {
+    await services().negotiation.expirePendingProposals(
+      ctx.session.user.id,
+      input.id,
+    );
     const { n, conversation } = await services().negotiation.authorized(
       ctx.session.user.id,
       input.id,
@@ -479,7 +496,7 @@ export const sidequestRouter = createTRPCRouter({
       activeProposalId: n.activeProposalId,
       participants: conversation.participants,
       participantNames: participants,
-      proposals,
+      proposals: proposals.map(publicProposal),
       approvals,
       events: events.filter(
         (e) =>
@@ -541,14 +558,23 @@ export const sidequestRouter = createTRPCRouter({
 });
 
 export const activityRouter = createTRPCRouter({
-  list: p.query(({ ctx }) =>
-    ctx.db
+  list: p.query(async ({ ctx }) => {
+    const activities = await ctx.db
       .select()
       .from(s.activities)
       .where(gte(s.activities.end, new Date()))
       .orderBy(s.activities.start)
-      .limit(100),
-  ),
+      .limit(100);
+    return activities.map((activity) => ({
+      ...activity,
+      ...activityLabels(activity),
+      description: activity.description.startsWith(
+        "Synthetic demonstration option",
+      )
+        ? "A sample group activity for the SideQuest demo."
+        : activity.description,
+    }));
+  }),
 });
 export const peopleRouter = createTRPCRouter({
   list: p.query(async ({ ctx }) => {

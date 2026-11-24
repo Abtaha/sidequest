@@ -83,7 +83,7 @@ test("real authentication, onboarding, saved memories, discovery and session rec
     .first()
     .click();
   await expect(
-    page.getByText("Synthetic board game meetup", { exact: true }),
+    page.getByText("Board game meetup", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Log out", exact: true }).click();
   await expect(page).toHaveURL(/\/login$/);

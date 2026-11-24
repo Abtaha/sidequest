@@ -442,6 +442,138 @@ it("renegotiates a confirmed plan with the same group from a Scout chat follow-u
       .where(eq(s.approvals.proposalId, updated.activeProposalId!)),
   ).toEqual([]);
 });
+it.each([true, false])(
+  "recovers an unrecognized activity reference in a four-person revision (valid retry: %s)",
+  async (validRetry) => {
+    const fourth = syntheticIds[3]!;
+    const group = [a, b, c, fourth];
+    const quest = await service.create(a, {
+      intent: "Meet for music this weekend",
+      requestId: randomUUID(),
+      constraints: {},
+    });
+    n = await service.start(a, quest.id, group.slice(1));
+    const options = await new EventAgent(f.db, model).options(
+      await service.participants(group, {}),
+    );
+    const initial = options[0]!.plan;
+    await apply(a, action("PROPOSE", b, "Music?", { plan: initial }));
+    for (const actor of group) {
+      await apply(
+        actor,
+        action("ACCEPT", actor === a ? b : a, "That works", {
+          proposalHash: proposalHash(initial),
+        }),
+      );
+    }
+    expect((await service.load(n.id)).n.status).toBe("AWAITING_APPROVAL");
+    await service.revise(b, {
+      negotiationId: n.id,
+      instruction: "Let’s go to a movie instead.",
+      constraints: {},
+      requestId: randomUUID(),
+    });
+    const feasible = options.filter(({ plan }) => plan !== initial);
+    const movieIndex = feasible.findIndex(({ activity }) =>
+      activity.tags.includes("movie"),
+    );
+    expect(movieIndex).toBeGreaterThanOrEqual(0);
+    const badSelection = {
+      ...action("PROPOSE", a, "How about a film?"),
+      plan: { optionId: "not-a-listed-option" },
+    };
+    model.replies.push(
+      badSelection,
+      validRetry
+        ? { ...badSelection, plan: { optionId: String(movieIndex + 1) } }
+        : badSelection,
+    );
+    await service.tick(n.id);
+    const { n: updated, conversation } = await service.load(n.id);
+    expect(updated).toMatchObject({ calls: 2, failure: null });
+    expect(conversation.participants).toEqual(group);
+    expect(model.inputs[1]?.data).toMatchObject({ retryOptionSelection: true });
+    if (validRetry) {
+      expect(updated).toMatchObject({ status: "NEGOTIATING", round: 2 });
+      const [proposal] = await f.db
+        .select()
+        .from(s.proposals)
+        .where(eq(s.proposals.id, updated.activeProposalId!));
+      expect(proposal?.plan).toEqual(feasible[movieIndex]!.plan);
+    } else {
+      expect(updated).toMatchObject({
+        status: "AWAITING_USER_INPUT",
+        round: 1,
+        activeProposalId: null,
+      });
+    }
+  },
+);
+it.each(["listing", "late approval"] as const)(
+  "expires a partially approved proposal at its start when triggered by %s",
+  async (trigger) => {
+    const input = await agree();
+    await service.approve(a, { ...input, approved: true });
+    const [proposal] = await f.db
+      .select()
+      .from(s.proposals)
+      .where(eq(s.proposals.id, input.proposalId));
+    await f.db
+      .update(s.proposals)
+      .set({
+        plan: {
+          ...proposal!.plan,
+          start: new Date(Date.now() - 1000).toISOString(),
+        },
+      })
+      .where(eq(s.proposals.id, input.proposalId));
+    await service.expirePendingProposals(syntheticIds[3]!, n.id);
+    expect((await service.load(n.id)).n.status).toBe("AWAITING_APPROVAL");
+    if (trigger === "listing") await service.expirePendingProposals(b);
+    await expect(
+      service.approve(b, { ...input, approved: true }),
+    ).rejects.toThrow("expired before everyone approved");
+    await service.expirePendingProposals(a, n.id);
+    expect((await service.load(n.id)).n).toMatchObject({
+      status: "FAILED",
+      failure: "PROPOSAL_EXPIRED",
+      activeProposalId: input.proposalId,
+    });
+    expect(
+      await f.db
+        .select()
+        .from(s.approvals)
+        .where(eq(s.approvals.proposalId, input.proposalId)),
+    ).toHaveLength(1);
+    expect(
+      await f.db
+        .select()
+        .from(s.negotiationEvents)
+        .where(
+          and(
+            eq(s.negotiationEvents.negotiationId, n.id),
+            eq(s.negotiationEvents.type, "FAILED"),
+          ),
+        ),
+    ).toHaveLength(1);
+  },
+);
+it("keeps a fully approved proposal confirmed after the start passes", async () => {
+  const input = await agree();
+  for (const actor of [a, b, c])
+    await service.approve(actor, { ...input, approved: true });
+  await f.db
+    .update(s.proposals)
+    .set({
+      plan: { ...plan, start: new Date(Date.now() - 1000).toISOString() },
+    })
+    .where(eq(s.proposals.id, input.proposalId));
+  await service.expirePendingProposals(b, n.id);
+  expect((await service.load(n.id)).n).toMatchObject({
+    status: "CONFIRMED",
+    failure: null,
+  });
+});
 it("invalidates stale human and agent approvals on revision and resumes", async () => {
   const input = await agree();
   await service.approve(a, { ...input, approved: true });
@@ -619,6 +751,27 @@ it("terminates a repeated-message loop", async () => {
   await expect(apply(a, action("INQUIRY", b, "Same question"))).rejects.toThrow(
     "Repeated identical message",
   );
+});
+it("asks for human input when a Scout repeats a message after a retry", async () => {
+  const repeated = action("INQUIRY", b, "Same question");
+  model.replies.push(
+    repeated,
+    action("INFORM", a, "I have already answered that"),
+    repeated,
+    repeated,
+  );
+  const result = await service.run(a, n.id);
+  expect(result).toMatchObject({
+    status: "AWAITING_USER_INPUT",
+    failure: null,
+    calls: 4,
+  });
+  expect(model.inputs[3]?.data).toMatchObject({ retryRepeatedMessage: true });
+  const messages = await f.db
+    .select()
+    .from(s.agentMessages)
+    .where(eq(s.agentMessages.conversationId, n.conversationId));
+  expect(messages).toHaveLength(2);
 });
 it("enforces configurable model and message budgets", async () => {
   const bounded = new NegotiationService(

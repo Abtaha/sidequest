@@ -8,18 +8,21 @@ import {
   user,
 } from "../db/schema";
 import type { Store } from "./storage";
+import { activityLabels } from "./activity-labels";
 
 const planningStatuses = [
   "DISCOVERING",
   "NEGOTIATING",
   "AWAITING_USER_INPUT",
 ] as const;
-const scheduledStatuses = ["AWAITING_APPROVAL", "CONFIRMED"] as const;
-
 function currentPlanRows(store: Store, userId: string, otherThan?: string) {
-  const upcoming = and(
-    inArray(negotiations.status, [...scheduledStatuses]),
-    sql`(${proposals.plan}->>'end')::timestamptz > now()`,
+  const futureStart = sql`(${proposals.plan}->>'start')::timestamptz > now()`;
+  const upcoming = or(
+    and(eq(negotiations.status, "AWAITING_APPROVAL"), futureStart),
+    and(
+      eq(negotiations.status, "CONFIRMED"),
+      sql`(${proposals.plan}->>'end')::timestamptz > now()`,
+    ),
   );
   return store
     .select({
@@ -28,6 +31,7 @@ function currentPlanRows(store: Store, userId: string, otherThan?: string) {
       members: agentConversations.participants,
       intent: sidequests.intent,
       title: sql<string | null>`${proposals.activitySnapshot}->>'title'`,
+      location: sql<string | null>`${proposals.activitySnapshot}->>'location'`,
       start: sql<string | null>`${proposals.plan}->>'start'`,
       end: sql<string | null>`${proposals.plan}->>'end'`,
       status: negotiations.status,
@@ -50,7 +54,13 @@ function currentPlanRows(store: Store, userId: string, otherThan?: string) {
         sql`${agentConversations.participants} @> ${JSON.stringify([userId])}::jsonb`,
         otherThan
           ? and(ne(agentConversations.id, otherThan), upcoming)
-          : or(inArray(negotiations.status, [...planningStatuses]), upcoming),
+          : or(
+              and(
+                inArray(negotiations.status, [...planningStatuses]),
+                or(sql`${proposals.id} is null`, futureStart),
+              ),
+              upcoming,
+            ),
       ),
     )
     .orderBy(
@@ -72,7 +82,11 @@ export async function currentPlansForChat(store: Store, userId: string) {
   let bytes = 0;
   const plans = rows
     .map((row) => ({
-      title: (row.title ?? row.intent).slice(0, 140),
+      title: (row.title
+        ? activityLabels({ title: row.title, location: row.location ?? "" })
+            .title
+        : row.intent
+      ).slice(0, 140),
       status: row.status,
       role: row.ownerId === userId ? "organizer" : "participant",
       people: row.members
