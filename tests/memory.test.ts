@@ -271,6 +271,26 @@ describe("persistent memory", () => {
     expect(drafts).toHaveLength(1);
     expect(drafts[0]).toMatchObject({ id: first.planningQuestId, intent });
   });
+  it("continues planning when a memory candidate has malformed evidence", async () => {
+    const content = "Find a board game meetup. I love indie music.";
+    model.replies.push(
+      {
+        memories: [
+          {
+            ...candidate("board games", "interest:games"),
+            evidence: ["board game"],
+          },
+          candidate("indie music"),
+        ],
+      },
+      { content: "I'll look for a game meetup.", planningIntent: content },
+    );
+    const result = await scout.send(uid, { content, requestId: randomUUID() });
+    expect(result.planningQuestId).toBeDefined();
+    expect((await memory.retrieve(uid)).map((item) => item.key)).toEqual([
+      "interest:indie",
+    ]);
+  });
   it("retries a Scout request without duplicate transcript or memory effects", async () => {
     const request = { content: "Enjoys indie music", requestId: randomUUID() };
     model.replies.push(
