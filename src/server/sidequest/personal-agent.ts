@@ -11,6 +11,7 @@ import { actionSchema, type AgentAction } from "./types";
 import { planningCommitmentsForScout } from "./plan-context";
 import { activityLabels } from "./activity-labels";
 export class InvalidScoutOption extends Error {}
+export class InvalidScoutRecipient extends Error {}
 export type Turn = {
   userId: string;
   conversationId: string;
@@ -29,6 +30,7 @@ export type Turn = {
   eventAdvice: unknown;
   retryOptionSelection?: boolean;
   retryRepeatedMessage?: boolean;
+  retryRecipientSelection?: boolean;
 };
 export function createPersonalAgent(
   db: Database,
@@ -164,7 +166,9 @@ ${s.input.retryOptionSelection ? "Your previous activity reference did not match
 
 ${s.input.retryRepeatedMessage ? "Your last action repeated a message. Take a different action that advances the plan, such as suggesting a different feasible option or asking your human which constraint to relax. Do not rephrase the same message." : ""}
 
-Use ACCEPT when the top-level proposal fits your user. The server records votes against the version shown to you. Agent acceptance never approves for a human. Ask other Scouts about their own users if you need missing information. If incomingMessageId is supplied, respond to that message. Do not repeat a question already answered. Use REQUEST_HUMAN for a decision only your own human can make. Use WITHDRAW if your user would pass on the outing after considering the options. Give a short response without revealing private reasons. An automatically assembled group may continue without your user. Use null for recipientId on CONSULT_EVENTS, REQUEST_HUMAN, WITHDRAW, and END. For other actions choose an allowedRecipientIds entry. One-to-one routing is automatic.`,
+${s.input.retryRecipientSelection ? "Your last recipient was not an eligible Scout. Copy an ID exactly from allowedRecipientIds, or use REQUEST_HUMAN if you cannot address the message." : ""}
+
+Use ACCEPT when the top-level proposal fits your user. The server records votes against the version shown to you. Agent acceptance never approves for a human. Ask other Scouts about their own users if you need missing information. If incomingMessageId is supplied, respond to that message. Do not repeat a question already answered. Use REQUEST_HUMAN for a decision only your own human can make. Use WITHDRAW if your user would pass on the outing after considering the options. Give a short response without revealing private reasons. An automatically assembled group may continue without your user. For directed messages, use an exact allowedRecipientIds entry. For votes, proposals, and internal actions, use null for recipientId and let the server handle routing. One-to-one routing is automatic.`,
         actionSchema.extend({
           type: z.enum([firstType!, ...otherTypes]),
           plan: z
@@ -174,9 +178,7 @@ Use ACCEPT when the top-level proposal fits your user. The server records votes 
             })
             .nullish(),
           proposalHash: actionSchema.shape.proposalHash.optional(),
-          recipientId: otherRecipients.length
-            ? z.enum([onlyRecipient, ...otherRecipients]).nullish()
-            : actionSchema.shape.recipientId.optional(),
+          recipientId: actionSchema.shape.recipientId.optional(),
         }),
         {
           ...s.input,
@@ -192,6 +194,17 @@ Use ACCEPT when the top-level proposal fits your user. The server records votes 
         action.type === "WITHDRAW";
       const proposesPlan =
         action.type === "PROPOSE" || action.type === "COUNTER";
+      const votes = action.type === "ACCEPT" || action.type === "REJECT";
+      const recipient = recipients.find((id) => id === action.recipientId);
+      if (
+        otherRecipients.length &&
+        !internal &&
+        !proposesPlan &&
+        !votes &&
+        action.recipientId != null &&
+        !recipient
+      )
+        throw new InvalidScoutRecipient("Scout recipient is outside the group");
       const plan = proposesPlan
         ? (
             slots.find((option) => option.optionId === action.plan?.optionId) ??
@@ -206,15 +219,12 @@ Use ACCEPT when the top-level proposal fits your user. The server records votes 
         action: {
           ...action,
           plan: plan ?? null,
-          proposalHash:
-            action.type === "ACCEPT" || action.type === "REJECT"
-              ? (s.input.proposal?.hash ?? null)
-              : (action.proposalHash ?? null),
+          proposalHash: votes
+            ? (s.input.proposal?.hash ?? null)
+            : (action.proposalHash ?? null),
           recipientId: internal
             ? null
-            : otherRecipients.length
-              ? (action.recipientId ?? replyTo ?? onlyRecipient)
-              : onlyRecipient,
+            : (recipient ?? replyTo ?? onlyRecipient),
         },
       };
     })
