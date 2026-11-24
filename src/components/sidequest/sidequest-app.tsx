@@ -12,6 +12,7 @@ import { ScoutView } from "./scout-view";
 import { ActivityDetails } from "./activity-details";
 import { SettingsDialog } from "./settings-dialog";
 import { NegotiationPanel } from "./negotiation-panel";
+import { Icon } from "./icons";
 function catalogActivity(
   row: RouterOutputs["activity"]["list"][number],
 ): Activity {
