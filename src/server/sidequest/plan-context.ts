@@ -8,6 +8,7 @@ import {
   user,
 } from "../db/schema";
 import type { Store } from "./storage";
+import { activityLabels } from "./activity-labels";
 
 const planningStatuses = [
   "DISCOVERING",
@@ -30,6 +31,7 @@ function currentPlanRows(store: Store, userId: string, otherThan?: string) {
       members: agentConversations.participants,
       intent: sidequests.intent,
       title: sql<string | null>`${proposals.activitySnapshot}->>'title'`,
+      location: sql<string | null>`${proposals.activitySnapshot}->>'location'`,
       start: sql<string | null>`${proposals.plan}->>'start'`,
       end: sql<string | null>`${proposals.plan}->>'end'`,
       status: negotiations.status,
@@ -80,7 +82,11 @@ export async function currentPlansForChat(store: Store, userId: string) {
   let bytes = 0;
   const plans = rows
     .map((row) => ({
-      title: (row.title ?? row.intent).slice(0, 140),
+      title: (row.title
+        ? activityLabels({ title: row.title, location: row.location ?? "" })
+            .title
+        : row.intent
+      ).slice(0, 140),
       status: row.status,
       role: row.ownerId === userId ? "organizer" : "participant",
       people: row.members
