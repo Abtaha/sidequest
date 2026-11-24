@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { Annotation, StateGraph, START, END } from "@langchain/langgraph";
 import { and, eq, ne, desc, notExists } from "drizzle-orm";
-import { agentEpisodes, scoutMessages, userMemories } from "../db/schema";
+import {
+  agentEpisodes,
+  proposals,
+  scoutMessages,
+  userMemories,
+} from "../db/schema";
 import { Mailbox } from "./mailbox";
 import { type Database } from "./storage";
 import { type MemoryService } from "./memory";
@@ -24,7 +29,10 @@ export type Turn = {
   participants: string[];
   incomingFrom?: string;
   incomingMessageId?: string;
-  proposal: { hash: string } | null;
+  proposal: Pick<
+    typeof proposals.$inferSelect,
+    "hash" | "plan" | "activitySnapshot"
+  > | null;
   constraints: unknown;
   options: ReturnType<EventAgent["optionsFor"]>;
   eventAdvice: unknown;
@@ -153,6 +161,19 @@ export function createPersonalAgent(
           (type !== "PROPOSE" || !s.input.proposal) &&
           ((type !== "PROPOSE" && type !== "COUNTER") || slots.length > 0),
       );
+      const current = s.input.proposal;
+      const proposal = current
+        ? {
+            hash: current.hash,
+            plan: current.plan,
+            activitySnapshot: {
+              ...activityLabels(current.activitySnapshot),
+              cost: current.activitySnapshot.cost,
+              capacity: current.activitySnapshot.capacity,
+              tags: current.activitySnapshot.tags,
+            },
+          }
+        : null;
       const action = await model.generate(
         `You are the independent Scout of user ${s.input.userId}. Represent only this user using their private context. Use the latest explicit preferences and corrections. Check commitments when choosing or voting on a slot. For an overlap with a confirmed plan, prefer a different time or ask your human if a conflict must be resolved. A tentative proposal may change. Share only availability or the need for a different time with other Scouts. Share only necessary planning details.
 
@@ -160,7 +181,7 @@ ${s.input.proposal ? "Your task this turn is to vote on the active proposal. Acc
 
 A revision keeps the same participants. If revisionInstruction is supplied, it is your user's latest change to this plan. Follow it ahead of older requests. Keep previousActivity if the user only asked about scheduling. If they ask for an earlier or later time, compare the candidate's start to previousStart. If no supplied option fits the requested change, use REQUEST_HUMAN. When reviewing another Scout's revised proposal, evaluate the new activity against your own user's preferences and constraints. If it fits, ACCEPT. Counter only for a concrete unmet need or strong preference of your user, and choose an option that supports the activity change. A soft preference may be compromised.
 
-Use PROPOSE when there is no active proposal and a supplied option fits. Use COUNTER to suggest a different supplied option, including a different time for the same activity. For either action, return plan as {"optionId":"1"} with the exact listed optionId of the slot you chose. The server uses that option's exact time and participants. For all other actions use plan: null. Refer to the proposal card for exact times and capacity. Group size is the number of participants. Venue capacity is the maximum it can hold.
+Use PROPOSE when there is no active proposal and a supplied option fits. Use COUNTER to suggest a different supplied option, including a different time for the same activity. For either action, return plan as {"optionId":"1"} with the exact listed optionId of the slot you chose. The server uses that option's exact time and participants. For all other actions use plan: null. Use plan.start and plan.end as the exact meeting times. An activity's catalog hours describe the larger window for booking and can differ from the meeting times. The server has already checked that the proposed slot fits the catalog hours and known availability. Group size is the number of participants. Venue capacity is the maximum it can hold.
 
 ${s.input.retryOptionSelection ? "Your previous activity reference did not match a supplied slot. Copy an optionId exactly from options. If none fits the request, use REQUEST_HUMAN and ask a short question." : ""}
 
@@ -182,6 +203,7 @@ Use ACCEPT when the top-level proposal fits your user. The server records votes 
         }),
         {
           ...s.input,
+          proposal,
           allowedRecipientIds: recipients,
           options: slots,
           privateContext: s.context,
