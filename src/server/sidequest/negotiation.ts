@@ -593,23 +593,25 @@ export class NegotiationService {
       let stage = "prepare_context";
       try {
         const proposedHashes = new Set(proposals.map((p) => p.hash));
-        const options = (
-          await new EventAgent(this.db, this.model).options(
-            members,
-            quest.constraints,
-            Boolean(proposal ?? move),
-            move ? priorProposal?.plan.activityId : undefined,
-          )
-        ).filter(({ plan }) => {
-          if (proposedHashes.has(proposalHash(plan))) return false;
-          if (!move || !priorProposal) return true;
-          return (
-            plan.activityId === priorProposal.plan.activityId &&
-            (move === "later"
-              ? plan.start > priorProposal.plan.start
-              : plan.start < priorProposal.plan.start)
-          );
-        });
+        const options = await new EventAgent(this.db, this.model).options(
+          members,
+          quest.constraints,
+          Boolean(proposal ?? move),
+          move ? priorProposal?.plan.activityId : undefined,
+          {
+            query: revisionInstruction ?? quest.intent,
+            acceptPlan: (plan) => {
+              if (proposedHashes.has(proposalHash(plan))) return false;
+              if (!move || !priorProposal) return true;
+              return (
+                plan.activityId === priorProposal.plan.activityId &&
+                (move === "later"
+                  ? plan.start > priorProposal.plan.start
+                  : plan.start < priorProposal.plan.start)
+              );
+            },
+          },
+        );
         const [advice] = await this.db
           .select()
           .from(s.negotiationEvents)

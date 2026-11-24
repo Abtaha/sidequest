@@ -5,6 +5,13 @@ import { validatePlan, activityHash, type Participant } from "./constraints";
 import { type Constraints, type Plan } from "./types";
 import { type Model } from "./model";
 import { z } from "zod";
+import { interestTerms } from "./discovery";
+
+type OptionSelection = {
+  query?: string;
+  acceptPlan?: (plan: Plan) => boolean;
+};
+
 export class EventAgent {
   constructor(
     private store: Store,
@@ -15,12 +22,14 @@ export class EventAgent {
     constraints: Constraints = {},
     includeLaterSlots = false,
     activityId?: string,
+    selection: OptionSelection = {},
   ) {
     return this.optionsFor(
       await this.catalog(constraints, activityId),
       participants,
       constraints,
       includeLaterSlots,
+      selection,
     );
   }
   async catalog(constraints: Constraints, activityId?: string) {
@@ -42,11 +51,27 @@ export class EventAgent {
     participants: Participant[],
     constraints: Constraints,
     includeLaterSlots = false,
+    selection: OptionSelection = {},
   ) {
     const options: { activity: typeof activities.$inferSelect; plan: Plan }[] =
       [];
     const later: typeof options = [];
-    for (const activity of rows) {
+    const requested = interestTerms(selection.query ?? "");
+    const ranked = requested.size
+      ? rows
+          .map((activity) => {
+            const terms = interestTerms(
+              [activity.title, activity.category, ...activity.tags].join(" "),
+            );
+            const score = [...requested].filter((term) =>
+              terms.has(term),
+            ).length;
+            return { activity, score };
+          })
+          .sort((a, b) => b.score - a.score)
+          .map(({ activity }) => activity)
+      : rows;
+    for (const activity of ranked) {
       // Enumerate starts at availability boundaries and explicit session windows.
       const windows = [
         ...participants.flatMap((p) => [
@@ -83,6 +108,7 @@ export class EventAgent {
         };
         try {
           validatePlan(plan, activity, participants, constraints);
+          if (selection.acceptPlan && !selection.acceptPlan(plan)) continue;
           if (firstSlot) {
             later.push({ activity, plan });
             break;
@@ -103,7 +129,15 @@ export class EventAgent {
     constraints: Constraints,
     query: string,
   ) {
-    const options = await this.options(participants, constraints);
+    const options = await this.options(
+      participants,
+      constraints,
+      false,
+      undefined,
+      {
+        query,
+      },
+    );
     if (!options.length) return { options, recommendations: [] };
     const response = await this.model.generate(
       "You are the catalog event agent. Explain which supplied feasible options fit the query. Return ONLY supplied activity IDs, never invent events, prices, availability or reservations.",
