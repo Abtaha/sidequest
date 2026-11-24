@@ -44,6 +44,7 @@ import {
   type Participant,
 } from "./constraints";
 import { EventAgent } from "./events";
+import { activityLabels } from "./activity-labels";
 import {
   discoveryScope,
   rankCandidatesByInterest,
@@ -630,11 +631,15 @@ export class NegotiationService {
             ? "Renegotiate the existing plan with the same group."
             : quest.intent,
           revisionTurn,
-          previousActivity: priorProposal?.activitySnapshot.title,
+          previousActivity: priorProposal
+            ? activityLabels(priorProposal.activitySnapshot).title
+            : undefined,
           previousStart: priorProposal?.plan.start,
           revisionInstruction:
             actor === revisionOwner ? revisionInstruction : undefined,
-          interestQuery: proposal?.activitySnapshot.title,
+          interestQuery: proposal
+            ? activityLabels(proposal.activitySnapshot).title
+            : undefined,
           participants: conversation.participants,
           incomingFrom: incoming?.senderId,
           incomingMessageId: incoming?.id,
@@ -852,8 +857,7 @@ export class NegotiationService {
             hash,
             plan: action.plan,
             activitySnapshot: {
-              title: activity.title,
-              location: activity.location,
+              ...activityLabels(activity),
               cost: activity.cost,
               capacity: activity.capacity,
               tags: activity.tags,

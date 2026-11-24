@@ -9,6 +9,7 @@ import { type Model } from "./model";
 import { type EventAgent } from "./events";
 import { actionSchema, type AgentAction } from "./types";
 import { planningCommitmentsForScout } from "./plan-context";
+import { activityLabels } from "./activity-labels";
 export class InvalidScoutOption extends Error {}
 export type Turn = {
   userId: string;
@@ -141,6 +142,7 @@ export function createPersonalAgent(
       const { options } = s.input;
       const slots = options.map((option, index) => ({
         ...option,
+        activity: { ...option.activity, ...activityLabels(option.activity) },
         optionId: String(index + 1),
       }));
       const [firstType, ...otherTypes] = actionSchema.shape.type.options.filter(

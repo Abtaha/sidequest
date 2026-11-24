@@ -34,7 +34,7 @@ function catalogActivity(
     category,
     description: row.description,
     reason: row.synthetic
-      ? "Synthetic demonstration activity; not a real venue or reservation."
+      ? "Demo activity with sample times and prices."
       : "Ask your Scouts to check this option for your group.",
   };
 }
@@ -393,7 +393,7 @@ export default function SideQuestApp({
                 <Icon name="bell" className="h-4 w-4" />
               </span>
               <span className="min-w-0">
-                <span className="block text-[11px] font-bold uppercase tracking-[0.12em] text-[#7f8b82]">
+                <span className="block text-[11px] font-bold tracking-[0.12em] text-[#7f8b82] uppercase">
                   New notification
                 </span>
                 <span className="mt-1 block text-sm font-semibold text-[#202a24]">
