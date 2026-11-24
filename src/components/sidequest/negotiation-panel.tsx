@@ -163,9 +163,11 @@ export function NegotiationPanel({
             </div>
             {n.failure && (
               <p className="mt-3 text-sm text-red-800">
-                This negotiation stopped:{" "}
-                {n.failure.replaceAll("_", " ").toLowerCase()}. You can update
-                the request below if its limits allow another attempt.
+                {n.failure === "PROPOSAL_EXPIRED"
+                  ? "This proposal expired before everyone approved."
+                  : `This negotiation stopped: ${n.failure.replaceAll("_", " ").toLowerCase()}.`}{" "}
+                You can update the request below if its limits allow another
+                attempt.
               </p>
             )}
             {proposal && (

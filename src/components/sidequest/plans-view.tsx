@@ -8,6 +8,7 @@ import { PageHeading } from "./shared";
 
 const failureReasons: Record<string, string> = {
   HUMAN_REJECTED: "A participant declined the proposal.",
+  PROPOSAL_EXPIRED: "The start time passed before everyone approved.",
   GROUP_NEEDS_ANOTHER_OPTION: "The group needed another option.",
   AGENT_ENDED_NEGOTIATION:
     "The Scouts ended the negotiation without an agreement.",
@@ -88,11 +89,13 @@ export function PlansView({
                   )}
                 </span>
                 <span className="rounded-full bg-[#f0f2ec] px-2.5 py-1 text-xs font-semibold text-[#627067]">
-                  {item.failure === "HUMAN_REJECTED"
-                    ? "Declined"
-                    : item.status === "CANCELLED"
-                      ? "Cancelled"
-                      : "Failed"}
+                  {item.failure === "PROPOSAL_EXPIRED"
+                    ? "Expired"
+                    : item.failure === "HUMAN_REJECTED"
+                      ? "Declined"
+                      : item.status === "CANCELLED"
+                        ? "Cancelled"
+                        : "Failed"}
                 </span>
               </Button>
             ))}
