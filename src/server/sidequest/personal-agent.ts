@@ -9,6 +9,7 @@ import { type Model } from "./model";
 import { type EventAgent } from "./events";
 import { actionSchema, type AgentAction } from "./types";
 import { planningCommitmentsForScout } from "./plan-context";
+export class InvalidScoutOption extends Error {}
 export type Turn = {
   userId: string;
   conversationId: string;
@@ -25,6 +26,8 @@ export type Turn = {
   constraints: unknown;
   options: ReturnType<EventAgent["optionsFor"]>;
   eventAdvice: unknown;
+  retryOptionSelection?: boolean;
+  retryRepeatedMessage?: boolean;
 };
 export function createPersonalAgent(
   db: Database,
@@ -153,7 +156,11 @@ ${s.input.proposal ? "Your task this turn is to vote on the active proposal. Acc
 
 A revision keeps the same participants. If revisionInstruction is supplied, it is your user's latest change to this plan. Follow it ahead of older requests. Keep previousActivity if the user only asked about scheduling. If they ask for an earlier or later time, compare the candidate's start to previousStart. If no supplied option fits the requested change, use REQUEST_HUMAN. When reviewing another Scout's revised proposal, evaluate the new activity against your own user's preferences and constraints. If it fits, ACCEPT. Counter only for a concrete unmet need or strong preference of your user, and choose an option that supports the activity change. A soft preference may be compromised.
 
-Use PROPOSE when there is no active proposal and a supplied option fits. Use COUNTER to suggest a different supplied option, including a different time for the same activity. For either action, copy the optionId into plan. The server uses that option's exact time and participants. For all other actions use plan: null. Refer to the proposal card for exact times and capacity. Group size is the number of participants. Venue capacity is the maximum it can hold.
+Use PROPOSE when there is no active proposal and a supplied option fits. Use COUNTER to suggest a different supplied option, including a different time for the same activity. For either action, return plan as {"optionId":"1"} with the exact listed optionId of the slot you chose. The server uses that option's exact time and participants. For all other actions use plan: null. Refer to the proposal card for exact times and capacity. Group size is the number of participants. Venue capacity is the maximum it can hold.
+
+${s.input.retryOptionSelection ? "Your previous activity reference did not match a supplied slot. Copy an optionId exactly from options. If none fits the request, use REQUEST_HUMAN and ask a short question." : ""}
+
+${s.input.retryRepeatedMessage ? "Your last action repeated a message. Take a different action that advances the plan, such as suggesting a different feasible option or asking your human which constraint to relax. Do not rephrase the same message." : ""}
 
 Use ACCEPT when the top-level proposal fits your user. The server records votes against the version shown to you. Agent acceptance never approves for a human. Ask other Scouts about their own users if you need missing information. If incomingMessageId is supplied, respond to that message. Do not repeat a question already answered. Use REQUEST_HUMAN for a decision only your own human can make. Use WITHDRAW if your user would pass on the outing after considering the options. Give a short response without revealing private reasons. An automatically assembled group may continue without your user. Use null for recipientId on CONSULT_EVENTS, REQUEST_HUMAN, WITHDRAW, and END. For other actions choose an allowedRecipientIds entry. One-to-one routing is automatic.`,
         actionSchema.extend({
@@ -192,7 +199,7 @@ Use ACCEPT when the top-level proposal fits your user. The server records votes 
           )?.plan
         : null;
       if (proposesPlan && !plan)
-        throw new Error("Scout must select a feasible activity");
+        throw new InvalidScoutOption("Scout must select a feasible activity");
       return {
         action: {
           ...action,

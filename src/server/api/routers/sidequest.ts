@@ -365,6 +365,7 @@ export const sidequestRouter = createTRPCRouter({
       services().negotiation.create(ctx.session.user.id, input),
     ),
   list: p.query(async ({ ctx }) => {
+    await services().negotiation.expirePendingProposals(ctx.session.user.id);
     const rows = await ctx.db
       .select({
         sidequest: s.sidequests,
@@ -442,6 +443,10 @@ export const sidequestRouter = createTRPCRouter({
         .then(publicState),
     ),
   getNegotiation: p.input(idInput).query(async ({ ctx, input }) => {
+    await services().negotiation.expirePendingProposals(
+      ctx.session.user.id,
+      input.id,
+    );
     const { n, conversation } = await services().negotiation.authorized(
       ctx.session.user.id,
       input.id,

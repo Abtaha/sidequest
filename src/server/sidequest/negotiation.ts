@@ -1,7 +1,18 @@
 import { Mailbox } from "./mailbox";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { and, eq, inArray, desc, asc, gt, gte, isNull, or } from "drizzle-orm";
+import {
+  and,
+  eq,
+  inArray,
+  desc,
+  asc,
+  gt,
+  gte,
+  isNull,
+  or,
+  sql,
+} from "drizzle-orm";
 import {
   Annotation,
   StateGraph,
@@ -15,11 +26,16 @@ import {
   DomainError,
   actionSchema,
   relativeTimeChange,
+  type AgentAction,
   type Constraints,
 } from "./types";
 import { type Model, log, modelLimits } from "./model";
 import { type MemoryService } from "./memory";
-import { createPersonalAgent } from "./personal-agent";
+import {
+  createPersonalAgent,
+  InvalidScoutOption,
+  type Turn,
+} from "./personal-agent";
 import {
   checkContacts,
   validatePlan,
@@ -42,6 +58,30 @@ export const defaultLimits = {
 };
 export type Limits = typeof defaultLimits;
 const running = ["DISCOVERING", "NEGOTIATING"];
+function isRepeatedMessage(
+  transcript: (typeof s.agentMessages.$inferSelect)[],
+  actor: string,
+  action: AgentAction,
+) {
+  return transcript.some(
+    (message) =>
+      message.senderId === actor &&
+      message.type === action.type &&
+      message.content === action.content &&
+      message.proposalHash === action.proposalHash,
+  );
+}
+const pendingProposalStatuses = [
+  "DISCOVERING",
+  "NEGOTIATING",
+  "AWAITING_USER_INPUT",
+  "AWAITING_APPROVAL",
+] as const;
+const expiredProposal = sql`exists (
+  select 1 from ${s.proposals}
+  where ${s.proposals.id} = ${s.negotiations.activeProposalId}
+    and (${s.proposals.plan}->>'start')::timestamptz <= clock_timestamp()
+)`;
 export class NegotiationService {
   private personal;
   constructor(
@@ -367,6 +407,50 @@ export class NegotiationService {
       reason: detail.reason,
     });
   }
+  private async expireProposal(tx: Store, id: string) {
+    const [expired] = await tx
+      .update(s.negotiations)
+      .set({
+        status: "FAILED",
+        failure: "PROPOSAL_EXPIRED",
+        pendingAction: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(s.negotiations.id, id),
+          inArray(s.negotiations.status, [...pendingProposalStatuses]),
+          expiredProposal,
+        ),
+      )
+      .returning({ id: s.negotiations.id });
+    if (expired)
+      await this.event(tx, id, "FAILED", { reason: "PROPOSAL_EXPIRED" });
+    return Boolean(expired);
+  }
+  async expirePendingProposals(userId: string, id?: string) {
+    const overdue = await this.db
+      .select({ id: s.negotiations.id })
+      .from(s.negotiations)
+      .innerJoin(
+        s.agentConversations,
+        eq(s.agentConversations.id, s.negotiations.conversationId),
+      )
+      .where(
+        and(
+          id ? eq(s.negotiations.id, id) : undefined,
+          sql`${s.agentConversations.participants} @> ${JSON.stringify([userId])}::jsonb`,
+          inArray(s.negotiations.status, [...pendingProposalStatuses]),
+          expiredProposal,
+        ),
+      );
+    for (const { id } of overdue) {
+      await this.db.transaction(async (tx) => {
+        await lock(tx, `negotiation:${id}`);
+        await this.expireProposal(tx, id);
+      });
+    }
+  }
   private fail(id: string, turn: number, reason: string) {
     return this.db.transaction(async (tx) => {
       await lock(tx, `negotiation:${id}`);
@@ -471,39 +555,41 @@ export class NegotiationService {
           : incoming?.recipientId) ??
         decisions.find((decision) => !decision.agentAccepted)?.userId ??
         conversation.participants[n.turn % conversation.participants.length]!;
-      const allowed = await this.db.transaction(async (tx) => {
-        await lock(tx, `negotiation:${id}`);
-        const { n: current } = await this.load(id, tx);
-        if (
-          current.turn !== n.turn ||
-          current.pendingAction ||
-          !running.includes(current.status)
-        )
-          return false;
-        if (
-          current.calls + 1 > this.limits.calls ||
-          current.tokens + this.limits.reservedTokensPerCall >
-            this.limits.tokens ||
-          messages.length >= this.limits.messages
-        )
-          return false;
-        await tx
-          .update(s.negotiations)
-          .set({
-            calls: current.calls + 1,
-            tokens: current.tokens + this.limits.reservedTokensPerCall,
-            status: "NEGOTIATING",
-            updatedAt: new Date(),
-          })
-          .where(eq(s.negotiations.id, id));
-        return true;
-      });
-      if (!allowed) {
+      const reserveCall = () =>
+        this.db.transaction(async (tx) => {
+          await lock(tx, `negotiation:${id}`);
+          const { n: current } = await this.load(id, tx);
+          if (
+            current.turn !== n.turn ||
+            current.pendingAction ||
+            !running.includes(current.status)
+          )
+            return false;
+          if (
+            current.calls + 1 > this.limits.calls ||
+            current.tokens + this.limits.reservedTokensPerCall >
+              this.limits.tokens ||
+            messages.length >= this.limits.messages
+          )
+            return false;
+          await tx
+            .update(s.negotiations)
+            .set({
+              calls: current.calls + 1,
+              tokens: current.tokens + this.limits.reservedTokensPerCall,
+              status: "NEGOTIATING",
+              updatedAt: new Date(),
+            })
+            .where(eq(s.negotiations.id, id));
+          return true;
+        });
+      if (!(await reserveCall())) {
         const fresh = await this.load(id);
         if (fresh.n.turn === n.turn && !fresh.n.pendingAction)
           return this.fail(id, n.turn, "RESOURCE_BUDGET_EXHAUSTED");
         return running.includes(fresh.n.status);
       }
+      let stage = "prepare_context";
       try {
         const proposedHashes = new Set(proposals.map((p) => p.hash));
         const options = (
@@ -537,40 +623,69 @@ export class NegotiationService {
           )
           .orderBy(desc(s.negotiationEvents.createdAt))
           .limit(1);
+        const input: Turn = {
+          userId: actor,
+          conversationId: conversation.id,
+          intent: revision
+            ? "Renegotiate the existing plan with the same group."
+            : quest.intent,
+          revisionTurn,
+          previousActivity: priorProposal?.activitySnapshot.title,
+          previousStart: priorProposal?.plan.start,
+          revisionInstruction:
+            actor === revisionOwner ? revisionInstruction : undefined,
+          interestQuery: proposal?.activitySnapshot.title,
+          participants: conversation.participants,
+          incomingFrom: incoming?.senderId,
+          incomingMessageId: incoming?.id,
+          proposal: proposal ?? null,
+          constraints: members.find((p) => p.userId === actor),
+          options,
+          eventAdvice: advice?.detail ?? null,
+        };
+        const askHuman = (content: string) => ({
+          type: "REQUEST_HUMAN" as const,
+          recipientId: null,
+          plan: null,
+          proposalHash: null,
+          content,
+        });
+        const generateAction = async (turn: Turn) => {
+          try {
+            const { action } = await this.personal.invoke({ input: turn });
+            if (isRepeatedMessage(messages, actor, action))
+              return { retryRepeatedMessage: true } as const;
+            return { action } as const;
+          } catch (error) {
+            if (!(error instanceof InvalidScoutOption)) throw error;
+            return { retryOptionSelection: true } as const;
+          }
+        };
+        const chooseAction = async () => {
+          const result = await generateAction(input);
+          if (result.action) return result.action;
+          log(
+            result.retryOptionSelection
+              ? "scout_option_unresolved"
+              : "scout_message_repeated",
+            { negotiationId: id, turn: n.turn },
+          );
+          if (await reserveCall()) {
+            const retry = await generateAction({ ...input, ...result });
+            if (retry.action) return retry.action;
+          }
+          return askHuman(
+            "We couldn’t agree on an option. Would a different time or activity work for you?",
+          );
+        };
         const started = Date.now();
-        const result =
+        stage = "choose_action";
+        const action =
           move && !options.length && !proposal
-            ? {
-                action: {
-                  type: "REQUEST_HUMAN",
-                  recipientId: null,
-                  plan: null,
-                  proposalHash: null,
-                  content: `I couldn’t find an ${move === "later" ? "available later" : "available earlier"} time for everyone. Would a different day or activity work?`,
-                },
-              }
-            : await this.personal.invoke({
-                input: {
-                  userId: actor,
-                  conversationId: conversation.id,
-                  intent: revision
-                    ? "Renegotiate the existing plan with the same group."
-                    : quest.intent,
-                  revisionTurn,
-                  previousActivity: priorProposal?.activitySnapshot.title,
-                  previousStart: priorProposal?.plan.start,
-                  revisionInstruction:
-                    actor === revisionOwner ? revisionInstruction : undefined,
-                  interestQuery: proposal?.activitySnapshot.title,
-                  participants: conversation.participants,
-                  incomingFrom: incoming?.senderId,
-                  incomingMessageId: incoming?.id,
-                  proposal: proposal ?? null,
-                  constraints: members.find((p) => p.userId === actor),
-                  options,
-                  eventAdvice: advice?.detail ?? null,
-                },
-              });
+            ? askHuman(
+                `I couldn’t find an ${move === "later" ? "available later" : "available earlier"} time for everyone. Would a different day or activity work?`,
+              )
+            : await chooseAction();
         log("agent_invocation", {
           negotiationId: id,
           agentId: actor,
@@ -579,10 +694,11 @@ export class NegotiationService {
         });
         pending = {
           actor,
-          action: actionSchema.parse(result.action),
+          action: actionSchema.parse(action),
           turn: n.turn,
           incomingMessageId: incoming?.id,
         };
+        stage = "save_action";
         await this.db.transaction(async (tx) => {
           await lock(tx, `negotiation:${id}`);
           const { n: current } = await this.load(id, tx);
@@ -597,6 +713,11 @@ export class NegotiationService {
               .where(eq(s.negotiations.id, id));
         });
       } catch {
+        log("negotiation_turn_failure", {
+          negotiationId: id,
+          turn: n.turn,
+          stage,
+        });
         return this.fail(id, n.turn, "MODEL_OR_CONTEXT_FAILURE");
       }
     }
@@ -651,6 +772,7 @@ export class NegotiationService {
       await lock(tx, `negotiation:${id}`);
       const { n, conversation, quest } = await this.load(id, tx);
       if (n.turn !== pending.turn || !running.includes(n.status)) return; // Already committed, safe replay.
+      if (n.activeProposalId && (await this.expireProposal(tx, id))) return;
       const { actor, action: raw } = pending;
       const action = actionSchema.parse(raw);
       for (const userId of [...conversation.participants].sort()) {
@@ -684,15 +806,7 @@ export class NegotiationService {
         .where(eq(s.agentMessages.conversationId, conversation.id));
       if (transcript.length >= this.limits.messages)
         throw new DomainError("PRECONDITION_FAILED", "Message limit reached");
-      if (
-        transcript.some(
-          (m) =>
-            m.senderId === actor &&
-            m.type === action.type &&
-            m.content === action.content &&
-            m.proposalHash === action.proposalHash,
-        )
-      )
+      if (isRepeatedMessage(transcript, actor, action))
         throw new DomainError(
           "PRECONDITION_FAILED",
           "Repeated identical message",
@@ -987,13 +1101,14 @@ export class NegotiationService {
       approved: boolean;
     },
   ) {
-    return this.db.transaction(async (tx) => {
+    const result = await this.db.transaction(async (tx) => {
       await lock(tx, `negotiation:${input.negotiationId}`);
       const { n, conversation, quest } = await this.authorized(
         userId,
         input.negotiationId,
         tx,
       );
+      if (n.failure === "PROPOSAL_EXPIRED") return null;
       if (
         n.activeProposalId !== input.proposalId ||
         !["AWAITING_APPROVAL", "CONFIRMED"].includes(n.status)
@@ -1019,6 +1134,11 @@ export class NegotiationService {
         .from(s.activities)
         .where(eq(s.activities.id, proposal.plan.activityId));
       if (!activity) throw new DomainError("CONFLICT", "Activity unavailable");
+      if (
+        n.status === "AWAITING_APPROVAL" &&
+        (await this.expireProposal(tx, n.id))
+      )
+        return null;
       validatePlan(proposal.plan, activity, members, quest.constraints);
       const [prior] = await tx
         .select()
@@ -1097,6 +1217,12 @@ export class NegotiationService {
         );
       return result!;
     });
+    if (!result)
+      throw new DomainError(
+        "CONFLICT",
+        "This proposal expired before everyone approved",
+      );
+    return result;
   }
   async revise(
     userId: string,

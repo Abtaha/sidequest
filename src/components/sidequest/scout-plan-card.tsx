@@ -80,7 +80,9 @@ export function ScoutPlanCard({
             : plan.status === "AWAITING_USER_INPUT"
               ? "Waiting for a reply"
               : plan.status === "FAILED"
-                ? "This plan needs a change"
+                ? plan.failure === "PROPOSAL_EXPIRED"
+                  ? "The proposal expired before everyone approved"
+                  : "This plan needs a change"
                 : plan.status === "CANCELLED"
                   ? "Plan cancelled"
                   : "Scout is checking what works for the group…"}

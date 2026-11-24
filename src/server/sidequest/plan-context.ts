@@ -14,12 +14,14 @@ const planningStatuses = [
   "NEGOTIATING",
   "AWAITING_USER_INPUT",
 ] as const;
-const scheduledStatuses = ["AWAITING_APPROVAL", "CONFIRMED"] as const;
-
 function currentPlanRows(store: Store, userId: string, otherThan?: string) {
-  const upcoming = and(
-    inArray(negotiations.status, [...scheduledStatuses]),
-    sql`(${proposals.plan}->>'end')::timestamptz > now()`,
+  const futureStart = sql`(${proposals.plan}->>'start')::timestamptz > now()`;
+  const upcoming = or(
+    and(eq(negotiations.status, "AWAITING_APPROVAL"), futureStart),
+    and(
+      eq(negotiations.status, "CONFIRMED"),
+      sql`(${proposals.plan}->>'end')::timestamptz > now()`,
+    ),
   );
   return store
     .select({
@@ -50,7 +52,13 @@ function currentPlanRows(store: Store, userId: string, otherThan?: string) {
         sql`${agentConversations.participants} @> ${JSON.stringify([userId])}::jsonb`,
         otherThan
           ? and(ne(agentConversations.id, otherThan), upcoming)
-          : or(inArray(negotiations.status, [...planningStatuses]), upcoming),
+          : or(
+              and(
+                inArray(negotiations.status, [...planningStatuses]),
+                or(sql`${proposals.id} is null`, futureStart),
+              ),
+              upcoming,
+            ),
       ),
     )
     .orderBy(
