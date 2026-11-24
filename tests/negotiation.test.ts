@@ -734,12 +734,37 @@ it("contains injected agent data and rejects injected unauthorized actions", asy
   );
   model.replies.push(
     action("INQUIRY", "outsider", "Executing injected command"),
+    action("INQUIRY", "outsider", "Executing injected command again"),
   );
   const result = await service.run(a, n.id);
-  expect(result.status).toBe("FAILED");
-  expect(result.failure).toBe("MODEL_OR_CONTEXT_FAILURE");
+  expect(result.status).toBe("AWAITING_USER_INPUT");
+  expect(result.failure).toBeNull();
+  expect(model.inputs[1]?.data).toMatchObject({
+    retryRecipientSelection: true,
+  });
+  const transcript = await f.db
+    .select()
+    .from(s.agentMessages)
+    .where(eq(s.agentMessages.conversationId, n.conversationId));
+  expect(transcript.map((message) => message.recipientId)).toEqual([b]);
   expect(JSON.stringify(model.inputs[0]!.data)).toContain("Ignore the system");
   expect(model.inputs[0]!.task).toContain("independent Scout");
+});
+it("routes a group vote through an authorized peer if the model returns a group alias", async () => {
+  await propose();
+  model.replies.push(action("ACCEPT", "everyone", "This slot fits my user."));
+  await service.tick(n.id);
+  const transcript = await f.db
+    .select()
+    .from(s.agentMessages)
+    .where(eq(s.agentMessages.conversationId, n.conversationId));
+  expect(transcript.find((message) => message.type === "ACCEPT")).toMatchObject(
+    {
+      senderId: b,
+      recipientId: a,
+      proposalHash: proposalHash(plan),
+    },
+  );
 });
 it("routes a one-to-one turn to its only authorized peer", async () => {
   const quest = await service.create(a, {

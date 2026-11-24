@@ -34,6 +34,7 @@ import { type MemoryService } from "./memory";
 import {
   createPersonalAgent,
   InvalidScoutOption,
+  InvalidScoutRecipient,
   type Turn,
 } from "./personal-agent";
 import {
@@ -664,8 +665,11 @@ export class NegotiationService {
               return { retryRepeatedMessage: true } as const;
             return { action } as const;
           } catch (error) {
-            if (!(error instanceof InvalidScoutOption)) throw error;
-            return { retryOptionSelection: true } as const;
+            if (error instanceof InvalidScoutOption)
+              return { retryOptionSelection: true } as const;
+            if (error instanceof InvalidScoutRecipient)
+              return { retryRecipientSelection: true } as const;
+            throw error;
           }
         };
         const chooseAction = async () => {
@@ -674,7 +678,9 @@ export class NegotiationService {
           log(
             result.retryOptionSelection
               ? "scout_option_unresolved"
-              : "scout_message_repeated",
+              : result.retryRecipientSelection
+                ? "scout_recipient_unresolved"
+                : "scout_message_repeated",
             { negotiationId: id, turn: n.turn },
           );
           if (await reserveCall()) {
