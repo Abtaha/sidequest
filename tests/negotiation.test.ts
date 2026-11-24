@@ -754,6 +754,13 @@ it("routes a group vote through an authorized peer if the model returns a group 
   await propose();
   model.replies.push(action("ACCEPT", "everyone", "This slot fits my user."));
   await service.tick(n.id);
+  expect(model.inputs[0]?.data).toMatchObject({ proposal: { plan } });
+  expect(model.inputs[0]?.data).not.toHaveProperty(
+    "proposal.activitySnapshot.start",
+  );
+  expect(model.inputs[0]?.data).not.toHaveProperty(
+    "proposal.activitySnapshot.end",
+  );
   const transcript = await f.db
     .select()
     .from(s.agentMessages)
