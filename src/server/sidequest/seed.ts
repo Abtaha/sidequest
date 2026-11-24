@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import * as s from "../db/schema";
 import { type Database } from "./storage";
+import { createDaejeonActivities } from "./daejeon-activities";
 export const syntheticIds = Array.from(
   { length: 8 },
   (_, i) => `synthetic-user-${i + 1}`,
@@ -162,18 +163,21 @@ export async function seed(db: Database, date = new Date()) {
         start: at(10),
         end: at(12),
       },
+      ...createDaejeonActivities(at),
     ];
-    for (const entry of entries)
+    for (const entry of entries) {
+      const activity = {
+        location: "Fictional campus demo area (synthetic)",
+        description:
+          "Synthetic demonstration option; not an actual venue, ticket or reservation.",
+        ...entry,
+        synthetic: true,
+      };
       await tx
         .insert(s.activities)
-        .values({
-          ...entry,
-          location: "Fictional campus demo area (synthetic)",
-          description:
-            "Synthetic demonstration option; not an actual venue, ticket or reservation.",
-          synthetic: true,
-        })
-        .onConflictDoUpdate({ target: s.activities.id, set: entry });
+        .values(activity)
+        .onConflictDoUpdate({ target: s.activities.id, set: activity });
+    }
   });
   return { users: syntheticIds, saturday: saturday.toISOString() };
 }

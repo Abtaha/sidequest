@@ -42,7 +42,7 @@ export function requestedGroupSize(intent: string) {
   return { minGroup: size, maxGroup: size };
 }
 
-function interestTerms(text: string): Set<string> {
+export function interestTerms(text: string): Set<string> {
   const words =
     text
       .normalize("NFKC")

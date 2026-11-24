@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { beforeAll, afterAll, beforeEach, it, expect } from "vitest";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { MemorySaver } from "@langchain/langgraph";
 import { database } from "./database";
 import { QueueModel } from "./scripted-model";
@@ -11,6 +11,7 @@ import {
   defaultLimits,
 } from "../src/server/sidequest/negotiation";
 import { EventAgent } from "../src/server/sidequest/events";
+import { createDaejeonActivities } from "../src/server/sidequest/daejeon-activities";
 import { seed, syntheticIds } from "../src/server/sidequest/seed";
 import {
   proposalHash,
@@ -59,7 +60,11 @@ async function agree() {
 }
 beforeAll(async () => {
   f = await database();
-  await seed(f.db, new Date("2099-01-01T00:00:00Z"));
+  const date = new Date("2099-01-01T00:00:00Z");
+  await seed(f.db, date);
+  // Keep the scripted negotiations on the original catalog and its known slots.
+  const demoIds = createDaejeonActivities(() => date).map(({ id }) => id);
+  await f.db.delete(s.activities).where(inArray(s.activities.id, demoIds));
 });
 afterAll(async () => {
   await f.close();
@@ -151,13 +156,17 @@ it("uses the validated proposal slot even when Scout supplies a different time",
 });
 it("can counter with a later slot for the same activity", async () => {
   await propose();
-  const options = (
-    await new EventAgent(f.db, model).options(
-      await service.participants([a, b, c], {}),
-      { maxCost: 15000 },
-      true,
-    )
-  ).filter((option) => proposalHash(option.plan) !== proposalHash(plan));
+  const { quest } = await service.load(n.id);
+  const options = await new EventAgent(f.db, model).options(
+    await service.participants([a, b, c], {}),
+    quest.constraints,
+    true,
+    undefined,
+    {
+      query: quest.intent,
+      acceptPlan: (option) => proposalHash(option) !== proposalHash(plan),
+    },
+  );
   const index = options.findIndex(
     (option) =>
       option.plan.activityId === plan.activityId &&
@@ -468,11 +477,9 @@ it.each([true, false])(
       constraints: {},
       requestId: randomUUID(),
     });
-    const feasible = options.filter(({ plan }) => plan !== initial);
-    const movieIndex = feasible.findIndex(({ activity }) =>
+    const movie = options.find(({ activity }) =>
       activity.tags.includes("movie"),
-    );
-    expect(movieIndex).toBeGreaterThanOrEqual(0);
+    )!.plan;
     const badSelection = {
       ...action("PROPOSE", a, "How about a film?"),
       plan: { optionId: "not-a-listed-option" },
@@ -480,7 +487,7 @@ it.each([true, false])(
     model.replies.push(
       badSelection,
       validRetry
-        ? { ...badSelection, plan: { optionId: String(movieIndex + 1) } }
+        ? { ...badSelection, plan: { activityId: movie.activityId } }
         : badSelection,
     );
     await service.tick(n.id);
@@ -494,7 +501,7 @@ it.each([true, false])(
         .select()
         .from(s.proposals)
         .where(eq(s.proposals.id, updated.activeProposalId!));
-      expect(proposal?.plan).toEqual(feasible[movieIndex]!.plan);
+      expect(proposal?.plan).toEqual(movie);
     } else {
       expect(updated).toMatchObject({
         status: "AWAITING_USER_INPUT",
@@ -504,6 +511,41 @@ it.each([true, false])(
     }
   },
 );
+it("shortlists movie options before earlier unrelated Daejeon activities", async () => {
+  const start = new Date("2099-01-03T00:00:00Z");
+  const window = {
+    start: start.toISOString(),
+    end: new Date(+start + 48 * 3_600_000).toISOString(),
+  };
+  const members = (await service.participants([a, b, c], {})).map((member) => ({
+    ...member,
+    constraints: {},
+    windows: [window],
+  }));
+  const catalog = [
+    ...(await f.db.select().from(s.activities)),
+    ...createDaejeonActivities(
+      (hour) => new Date(+start + hour * 3_600_000),
+    ).map((activity) => ({ ...activity, synthetic: true })),
+  ].sort((a, b) => +a.start - +b.start);
+  const eventAgent = new EventAgent(f.db, model);
+  const constraints = { maxCost: 15000 };
+  expect(eventAgent.optionsFor(catalog, members, constraints)).toHaveLength(8);
+  const ranked = eventAgent.optionsFor(catalog, members, constraints, false, {
+    query: "Let’s go to a movie instead.",
+  });
+  expect(ranked.slice(0, 2).map(({ activity }) => activity.title)).toEqual([
+    "Cinema at Daejeon Shinsegae",
+    "Synthetic campus short film screening",
+  ]);
+  const alreadyProposed = proposalHash(ranked[0]!.plan);
+  const next = eventAgent.optionsFor(catalog, members, constraints, false, {
+    query: "Let’s go to a movie instead.",
+    acceptPlan: (plan) => proposalHash(plan) !== alreadyProposed,
+  });
+  expect(next[0]?.activity.title).toBe("Synthetic campus short film screening");
+  expect(next).toHaveLength(8);
+});
 it.each(["listing", "late approval"] as const)(
   "expires a partially approved proposal at its start when triggered by %s",
   async (trigger) => {
