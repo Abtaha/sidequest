@@ -56,12 +56,7 @@ export default function SideQuestApp({
           ["DISCOVERING", "NEGOTIATING"].includes(row.negotiation.status),
       )
         ? 2000
-        : query.state.data?.some(
-              (row) =>
-                row.negotiation && row.negotiation.status !== "CANCELLED",
-            )
-          ? 5000
-          : false,
+        : 5000,
   });
   const create = api.sidequest.create.useMutation(),
     start = api.sidequest.startNegotiation.useMutation();
@@ -121,6 +116,7 @@ export default function SideQuestApp({
       ? [
           {
             id: row.negotiation.id,
+            key: `${row.negotiation.id}:${row.negotiation.round}`,
             title: row.proposal?.activitySnapshot.title ?? row.sidequest.intent,
             status: row.negotiation.status,
           },
@@ -131,16 +127,21 @@ export default function SideQuestApp({
     if (!quests.isSuccess) return;
 
     const storageKey = `sidequest:seen-notifications:${userId}`;
-    const currentIds = notifications.map((notification) => notification.id);
+    const currentIds = notifications.map((notification) => notification.key);
     if (seenNotifications.current?.userId !== userId) {
       let initialIds = currentIds;
       try {
         const stored = window.localStorage.getItem(storageKey);
         const parsed: unknown = stored === null ? null : JSON.parse(stored);
-        if (Array.isArray(parsed))
+        if (Array.isArray(parsed)) {
           initialIds = parsed.filter(
             (id): id is string => typeof id === "string",
           );
+          for (const notification of notifications)
+            if (initialIds.includes(notification.id))
+              initialIds.push(notification.key);
+          initialIds = initialIds.filter((id) => id.includes(":"));
+        }
       } catch {
         // Keep tracking notifications for this session if storage is unavailable.
       }
@@ -149,7 +150,7 @@ export default function SideQuestApp({
 
     const seen = seenNotifications.current.ids;
     const notification = notifications
-      .filter((item) => !seen.has(item.id))
+      .filter((item) => !seen.has(item.key))
       .at(-1);
     for (const id of currentIds) seen.add(id);
     try {
